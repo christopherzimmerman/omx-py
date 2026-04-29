@@ -508,18 +508,33 @@ def _install_native_agents(
     """
     from omx.agents.native_config import (
         GeneratedNativeAgentConfig,
+        compose_role_instructions_for_role,
         generate_standalone_agent_toml,
     )
     from omx.agents.roles import AGENT_DEFINITIONS
+    from omx.utils.paths import package_root
 
     if not dry_run:
         agents_dir.mkdir(parents=True, exist_ok=True)
 
+    prompts_dir = package_root() / "assets" / "prompts"
+
     for agent in AGENT_DEFINITIONS:
+        # Load role prompt and compose developer instructions
+        prompt_file = prompts_dir / f"{agent.name}.md"
+        if prompt_file.exists():
+            prompt_content = prompt_file.read_text(encoding="utf-8")
+            dev_instructions = compose_role_instructions_for_role(
+                agent.name, prompt_content
+            )
+        else:
+            dev_instructions = f"You are {agent.name}: {agent.description}."
+
         config = GeneratedNativeAgentConfig(
             name=agent.name,
             description=agent.description,
             reasoning_effort=agent.reasoning_effort,
+            developer_instructions=dev_instructions,
         )
         toml_content = generate_standalone_agent_toml(config)
         dst = agents_dir / f"{agent.name}.toml"
