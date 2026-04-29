@@ -551,12 +551,14 @@ def _ensure_hooks(
         dry_run: If True, skip writing.
         verbose: Print activity detail.
     """
+
     def omx_hook(event):
         return {
             "command": ["omx", "mcp-serve", "state"],
             "event": event,
             "managed_by": "omx",
         }
+
     managed_events = {"notify", "stop", "session"}
 
     existing: dict[str, Any] = {}

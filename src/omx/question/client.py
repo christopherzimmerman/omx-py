@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 
-
 @dataclass
 class OmxQuestionSuccessPayload:
     """Successful question result payload.

@@ -8,7 +8,6 @@ from __future__ import annotations
 from typing import Any
 
 
-
 def init_team(
     team_name: str,
     cwd: str,

@@ -8,7 +8,6 @@ from __future__ import annotations
 from typing import Any
 
 
-
 def create_team_task(
     team_name: str,
     cwd: str,

@@ -58,6 +58,12 @@ def _format_value(value: Any) -> str:
         return repr(value)
     if isinstance(value, str):
         return f'"{_escape_string(value)}"'
+    if isinstance(value, dict):
+        # Inline table: {key = "val", key2 = 123}
+        items = ", ".join(
+            f"{_escape_key(k)} = {_format_value(v)}" for k, v in value.items()
+        )
+        return f"{{{items}}}"
     if isinstance(value, list):
         items = ", ".join(_format_value(item) for item in value)
         return f"[{items}]"
