@@ -361,22 +361,21 @@ def _pane_looks_ready(captured: str) -> bool:
     """Check if pane shows a CLI prompt (ready for input).
 
     Recognizes:
-    - Codex prompt line starting with ">"
-    - Shell prompts ending with $, #, %, or >
+    - Codex prompt line starting with "›" (U+203A) or ">" or "❯"
+    - Shell prompts ending with $, #, %, >, ›, or ❯
     - Claude/Codex welcome messages
-    - Skips update prompts (not a blocker for readiness)
     """
     lines = [ln.strip() for ln in captured.splitlines() if ln.strip()]
     if not lines:
         return False
     tail = "\n".join(lines[-5:])
-    # Codex prompt: line starting with >
-    if any(ln.startswith(">") for ln in lines[-3:]):
+    # Codex prompt: line starting with › (U+203A), >, or ❯ (U+276F)
+    if any(ln.startswith(("\u203a", ">", "\u276f")) for ln in lines[-3:]):
         return True
     # Common ready indicators
     return bool(
         re.search(
-            r"[>$#%]\s*$|What can I help|How can I help|Enter a prompt",
+            r"[>$#%\u203a\u276f]\s*$|What can I help|How can I help|Enter a prompt",
             tail,
         )
     )

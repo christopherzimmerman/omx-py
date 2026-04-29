@@ -20,6 +20,20 @@ class TestCodexPromptReady(unittest.TestCase):
         captured = "Some output\n> "
         self.assertTrue(_pane_looks_ready(captured))
 
+    def test_unicode_203a_prompt_is_ready(self):
+        """Codex uses U+203A (›) as its prompt character."""
+        captured = "Welcome to Codex!\n\n\u203a "
+        self.assertTrue(_pane_looks_ready(captured))
+
+    def test_unicode_203a_at_line_start(self):
+        captured = "Some output here\n\u203a "
+        self.assertTrue(_pane_looks_ready(captured))
+
+    def test_unicode_276f_prompt_is_ready(self):
+        """Some terminals use U+276F (❯) as prompt."""
+        captured = "Ready\n\u276f "
+        self.assertTrue(_pane_looks_ready(captured))
+
     def test_dollar_prompt_is_ready(self):
         captured = "user@host:~$ "
         self.assertTrue(_pane_looks_ready(captured))
