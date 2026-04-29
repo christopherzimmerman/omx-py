@@ -447,7 +447,10 @@ def _build_mcp_servers_section() -> dict[str, Any]:
     import sys
 
     return {
-        f"omx_{t}": {"command": sys.executable, "args": ["-m", "omx", "mcp-serve", t]}
+        f"omx_{t}": {
+            "command": sys.executable,
+            "args": ["-u", "-m", "omx", "mcp-serve", t],
+        }
         for t in MCP_TARGETS
     }
 
