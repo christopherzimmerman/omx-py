@@ -1,0 +1,83 @@
+name: Main
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run tests
+        run: python -m unittest discover -s tests/unit -v
+        env:
+          PYTHONPATH: src
+
+  package:
+    name: Verify package builds
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and install package
+        run: |
+          pip install .
+          # Confirm omx CLI entry point works
+          omx --version
+
+      - name: Verify zero runtime dependencies
+        run: |
+          DEPS=$(pip show omx 2>/dev/null | grep "^Requires:" | sed 's/Requires: //')
+          if [ -n "$DEPS" ]; then
+            echo "::error::Package has runtime dependencies: $DEPS"
+            exit 1
+          fi
+          echo "Package verified: zero runtime dependencies"
+
+  dependency-audit:
+    name: Zero-dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Audit imports
+        run: |
+          VIOLATIONS=$(grep -rn "^import\|^from" src/omx/ \
+            --include="*.py" \
+            | grep -v "__future__\|from omx\.\|import omx\." \
+            | grep -v "import json\|import os\|import sys\|import re" \
+            | grep -v "import signal\|import time\|import uuid\|import shutil" \
+            | grep -v "import subprocess\|import threading\|import tempfile\|import random" \
+            | grep -v "import argparse\|import ctypes" \
+            | grep -v "from pathlib\|from typing\|from dataclasses\|from enum\|from datetime" \
+            | grep -v "import tomllib\|import fcntl\|import msvcrt" \
+            | grep -v "import urllib\|from unittest" \
+            || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::Non-stdlib imports detected:"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "Zero-dependency audit passed"
