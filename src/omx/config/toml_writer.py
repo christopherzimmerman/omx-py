@@ -36,7 +36,8 @@ def _write_table(data: dict[str, Any], lines: list[str], prefix: str) -> None:
     for key, value in data.items():
         if not isinstance(value, dict):
             continue
-        full_key = f"{prefix}.{key}" if prefix else key
+        escaped = _escape_key(key)
+        full_key = f"{prefix}.{escaped}" if prefix else escaped
         if lines:
             lines.append("")
         lines.append(f"[{full_key}]")
@@ -44,7 +45,7 @@ def _write_table(data: dict[str, Any], lines: list[str], prefix: str) -> None:
 
 
 def _escape_key(key: str) -> str:
-    if all(c.isalnum() or c in "-_" for c in key) and key:
+    if key and all(c.isalnum() or c in "-_" for c in key):
         return key
     return f'"{_escape_string(key)}"'
 
