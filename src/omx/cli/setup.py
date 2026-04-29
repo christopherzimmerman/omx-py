@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any
 
 from omx.config.generator import merge_config, read_config, write_config
-from omx.config.toml_writer import dumps as toml_dumps
 from omx.utils.paths import (
     codex_agents_dir,
     codex_config_path,
@@ -440,9 +439,16 @@ MCP_TARGETS = ("state", "memory", "code_intel", "trace", "wiki")
 
 
 def _build_mcp_servers_section() -> dict[str, Any]:
-    """Build [mcp_servers] config entries for all OMX MCP servers."""
+    """Build [mcp_servers] config entries for all OMX MCP servers.
+
+    Uses sys.executable to ensure the same Python that installed omx
+    is used to run the MCP servers, avoiding PATH issues.
+    """
+    import sys
+
     return {
-        f"omx_{t}": {"command": "omx", "args": ["mcp-serve", t]} for t in MCP_TARGETS
+        f"omx_{t}": {"command": sys.executable, "args": ["-m", "omx", "mcp-serve", t]}
+        for t in MCP_TARGETS
     }
 
 
@@ -500,20 +506,22 @@ def _install_native_agents(
         dry_run: If True, skip writing.
         verbose: Print per-agent activity.
     """
+    from omx.agents.native_config import (
+        GeneratedNativeAgentConfig,
+        generate_standalone_agent_toml,
+    )
     from omx.agents.roles import AGENT_DEFINITIONS
 
     if not dry_run:
         agents_dir.mkdir(parents=True, exist_ok=True)
 
     for agent in AGENT_DEFINITIONS:
-        toml_content = toml_dumps(
-            {
-                "name": agent.name,
-                "description": agent.description,
-                "model_class": agent.model_class,
-                "reasoning_effort": agent.reasoning_effort,
-            }
+        config = GeneratedNativeAgentConfig(
+            name=agent.name,
+            description=agent.description,
+            reasoning_effort=agent.reasoning_effort,
         )
+        toml_content = generate_standalone_agent_toml(config)
         dst = agents_dir / f"{agent.name}.toml"
         if dst.exists() and not force:
             if dst.read_text(encoding="utf-8") == toml_content:
