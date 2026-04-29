@@ -192,6 +192,13 @@ def wait_for_worker_ready(
             time.sleep(delay)
             continue
 
+        # Auto-dismiss update prompts by selecting option 2 (skip)
+        if _pane_has_update_prompt(captured):
+            _dismiss_update_prompt(pane_id)
+            delay = 0.15
+            time.sleep(delay)
+            continue
+
         # Check if pane looks ready (showing a prompt)
         if _pane_looks_ready(captured):
             return True
@@ -328,15 +335,50 @@ def _accept_bypass_prompt(pane_id: str) -> None:
     run_command(["tmux", "send-keys", "-t", pane_id, "C-m"], check=False)
 
 
+def _dismiss_update_prompt(pane_id: str) -> None:
+    """Auto-dismiss Codex update prompt by selecting '2' (skip update)."""
+    run_command(["tmux", "send-keys", "-t", pane_id, "-l", "--", "2"], check=False)
+    time.sleep(0.12)
+    run_command(["tmux", "send-keys", "-t", pane_id, "C-m"], check=False)
+
+
+def _pane_has_update_prompt(captured: str) -> bool:
+    """Detect Codex update available prompt.
+
+    These prompts ask the user to update and should be skipped
+    during readiness polling — the CLI is still usable.
+    """
+    return bool(
+        re.search(
+            r"update available|new version|upgrade.*available|npm install -g",
+            captured,
+            re.IGNORECASE,
+        )
+    )
+
+
 def _pane_looks_ready(captured: str) -> bool:
-    """Check if pane shows a CLI prompt (ready for input)."""
+    """Check if pane shows a CLI prompt (ready for input).
+
+    Recognizes:
+    - Codex prompt line starting with ">"
+    - Shell prompts ending with $, #, %, or >
+    - Claude/Codex welcome messages
+    - Skips update prompts (not a blocker for readiness)
+    """
     lines = [ln.strip() for ln in captured.splitlines() if ln.strip()]
     if not lines:
         return False
     tail = "\n".join(lines[-5:])
+    # Codex prompt: line starting with >
+    if any(ln.startswith(">") for ln in lines[-3:]):
+        return True
     # Common ready indicators
     return bool(
-        re.search(r"[>$#%]\s*$|What can I help|How can I help|Enter a prompt", tail)
+        re.search(
+            r"[>$#%]\s*$|What can I help|How can I help|Enter a prompt",
+            tail,
+        )
     )
 
 

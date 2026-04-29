@@ -1,8 +1,12 @@
 """JSON-RPC 2.0 over stdio transport for MCP servers.
 
-Implements the MCP protocol without any external SDK dependency.
-Reads Content-Length framed JSON from stdin, dispatches to handlers,
-writes responses to stdout.
+Supports two framing modes:
+- Newline-delimited JSON (NDJSON) — primary, one JSON object per line
+- Content-Length framing — legacy, accepted for backward compatibility
+
+Output always uses NDJSON (one JSON line per message).
+
+Also supports protocol version negotiation and ping/pong.
 """
 
 from __future__ import annotations
@@ -11,19 +15,28 @@ import json
 import sys
 from typing import Any, Callable
 
+# Protocol versions we support, newest first
+SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26", "2024-11-05"]
+LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
 
 ToolHandler = Callable[[str, dict[str, Any]], dict[str, Any]]
 ToolLister = Callable[[], list[dict[str, Any]]]
 
 
 class McpServer:
-    """Minimal MCP server using JSON-RPC 2.0 over stdio."""
+    """Minimal MCP server using JSON-RPC 2.0 over stdio.
+
+    Reads NDJSON or Content-Length framed messages from stdin.
+    Writes NDJSON (one JSON object per line) to stdout.
+    Supports protocol version negotiation and ping keepalives.
+    """
 
     def __init__(self, name: str, version: str) -> None:
         self.name = name
         self.version = version
         self._tool_handler: ToolHandler | None = None
         self._tool_lister: ToolLister | None = None
+        self._negotiated_version: str = LATEST_PROTOCOL_VERSION
 
     def set_tool_handler(self, handler: ToolHandler) -> None:
         """Register the handler called when tools/call is invoked."""
@@ -44,6 +57,14 @@ class McpServer:
                 _write_message(response)
 
     def _handle_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
+        """Process a single JSON-RPC message and return the response.
+
+        Args:
+            message: Parsed JSON-RPC message dict.
+
+        Returns:
+            Response dict, or None for notifications.
+        """
         method = message.get("method", "")
         msg_id = message.get("id")
         params = message.get("params", {})
@@ -63,15 +84,25 @@ class McpServer:
             }
 
     def _dispatch(self, method: str, params: dict[str, Any]) -> Any:
+        """Dispatch a JSON-RPC method to the appropriate handler.
+
+        Args:
+            method: JSON-RPC method name.
+            params: Method parameters.
+
+        Returns:
+            Result value for the response.
+
+        Raises:
+            ValueError: If the method is unknown and not a notification.
+        """
         match method:
             case "initialize":
-                return {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": self.name, "version": self.version},
-                }
+                return self._handle_initialize(params)
             case "notifications/initialized":
                 return None
+            case "ping":
+                return {}
             case "tools/list":
                 if self._tool_lister:
                     return {"tools": self._tool_lister()}
@@ -85,35 +116,111 @@ class McpServer:
             case _:
                 raise ValueError(f"unknown method: {method}")
 
+    def _handle_initialize(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Handle the initialize request with protocol version negotiation.
+
+        Selects the best mutually supported protocol version. If the client
+        requests a version we support, use it. Otherwise fall back to our
+        latest supported version.
+
+        Args:
+            params: Initialize parameters, may contain "protocolVersion".
+
+        Returns:
+            Initialize result with negotiated version and capabilities.
+        """
+        requested = params.get("protocolVersion", "")
+        if requested in SUPPORTED_PROTOCOL_VERSIONS:
+            self._negotiated_version = requested
+        else:
+            self._negotiated_version = LATEST_PROTOCOL_VERSION
+
+        return {
+            "protocolVersion": self._negotiated_version,
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": self.name, "version": self.version},
+        }
+
 
 def _read_message() -> dict[str, Any] | None:
-    """Read a Content-Length framed JSON-RPC message from stdin."""
+    """Read a JSON-RPC message from stdin.
+
+    Supports two framing modes:
+    - NDJSON: a single line containing a complete JSON object
+    - Content-Length: HTTP-style headers followed by a JSON body
+
+    Legacy Content-Length framing is auto-detected when the first line
+    starts with "Content-Length:".
+
+    Returns:
+        Parsed message dict, or None on EOF.
+    """
     stdin = sys.stdin.buffer
-    content_length = -1
 
     while True:
         line = stdin.readline()
         if not line:
             return None
-        header = line.decode("utf-8").strip()
-        if not header:
-            break
-        if header.lower().startswith("content-length:"):
-            content_length = int(header.split(":", 1)[1].strip())
 
-    if content_length < 0:
+        decoded = line.decode("utf-8", errors="replace").strip()
+        if not decoded:
+            continue  # skip blank lines between messages
+
+        # Content-Length framing (legacy)
+        if decoded.lower().startswith("content-length:"):
+            return _read_content_length_body(stdin, decoded)
+
+        # NDJSON — the line itself is the JSON message
+        try:
+            return json.loads(decoded)
+        except json.JSONDecodeError:
+            continue  # skip malformed lines
+
+
+def _read_content_length_body(
+    stdin: Any,
+    first_header: str,
+) -> dict[str, Any] | None:
+    """Read the body of a Content-Length framed message.
+
+    Args:
+        stdin: Binary stdin stream.
+        first_header: The already-read first header line (decoded, stripped).
+
+    Returns:
+        Parsed message dict, or None on error.
+    """
+    content_length = int(first_header.split(":", 1)[1].strip())
+
+    # Read remaining headers until empty line
+    while True:
+        line = stdin.readline()
+        if not line:
+            return None
+        if not line.decode("utf-8", errors="replace").strip():
+            break
+
+    if content_length <= 0:
         return None
 
     body = stdin.read(content_length)
     if not body:
         return None
 
-    return json.loads(body.decode("utf-8"))
+    try:
+        return json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError:
+        return None
 
 
 def _write_message(message: dict[str, Any]) -> None:
-    """Write a Content-Length framed JSON-RPC message to stdout."""
-    body = json.dumps(message).encode("utf-8")
-    header = f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8")
-    sys.stdout.buffer.write(header + body)
+    """Write a JSON-RPC message to stdout using NDJSON framing.
+
+    Each message is a single line of compact JSON followed by a newline.
+
+    Args:
+        message: JSON-RPC response dict.
+    """
+    line = json.dumps(message, separators=(",", ":")) + "\n"
+    sys.stdout.buffer.write(line.encode("utf-8"))
     sys.stdout.buffer.flush()
