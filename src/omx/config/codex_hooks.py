@@ -53,17 +53,22 @@ def build_managed_codex_hooks_config(pkg_root: str) -> dict[str, Any]:
     Returns:
         Dict with ``hooks`` key containing managed hook entries.
     """
-    import os
+    import sys
 
-    hook_script = os.path.join(pkg_root, "dist", "scripts", "codex-native-hook.js")
-    command = f'node "{hook_script}"'
+    command = f"{sys.executable} -u -m omx.scripts.codex_native_hook"
     return {
         "hooks": {
-            "SessionStart": [_build_command_hook(command, matcher="startup|resume")],
-            "PreToolUse": [_build_command_hook(command, matcher="Bash")],
-            "PostToolUse": [_build_command_hook(command)],
-            "UserPromptSubmit": [_build_command_hook(command)],
-            "Stop": [_build_command_hook(command, timeout=30)],
+            "SessionStart": [
+                _build_command_hook(
+                    f"{command} session-start", matcher="startup|resume"
+                )
+            ],
+            "PreToolUse": [
+                _build_command_hook(f"{command} pre-tool-use", matcher="Bash")
+            ],
+            "PostToolUse": [_build_command_hook(f"{command} post-tool-use")],
+            "UserPromptSubmit": [_build_command_hook(f"{command} user-prompt-submit")],
+            "Stop": [_build_command_hook(f"{command} stop", timeout=30)],
         },
     }
 
@@ -92,7 +97,9 @@ def parse_codex_hooks_config(content: str) -> tuple[JsonObject, JsonObject] | No
         return None
 
 
-_OMX_HOOK_RE = re.compile(r"(?:^|[\\/])codex-native-hook\.js(?:[\"'\s]|$)")
+_OMX_HOOK_RE = re.compile(
+    r"(?:codex-native-hook\.js|omx\.scripts\.codex_native_hook)(?:[\"'\s]|$)"
+)
 
 
 def _is_omx_managed_hook_command(command: str) -> bool:

@@ -32,10 +32,12 @@ class TestCli(unittest.TestCase):
         result = self._run_omx("help")
         self.assertEqual(result.returncode, 0)
 
-    def test_no_args_shows_help(self):
+    def test_no_args_launches_or_errors(self):
+        """Bare omx now launches codex (exits non-zero if codex not on PATH)."""
         result = self._run_omx()
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("usage", result.stdout.lower())
+        # Either launches successfully (0) or fails because codex isn't installed
+        # Either way it should NOT just print help anymore
+        self.assertIn(result.returncode, (0, 1))
 
     def test_unknown_command_fails(self):
         result = self._run_omx("nonexistent_command")

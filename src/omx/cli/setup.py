@@ -578,14 +578,24 @@ def _ensure_hooks(
         verbose: Print activity detail.
     """
 
+    import sys as _sys
+
+    hook_command = f"{_sys.executable} -u -m omx.scripts.codex_native_hook"
+
     def omx_hook(event):
         return {
-            "command": ["omx", "mcp-serve", "state"],
+            "command": f"{hook_command} {event}",
             "event": event,
             "managed_by": "omx",
         }
 
-    managed_events = {"notify", "stop", "session"}
+    managed_events = {
+        "session-start",
+        "user-prompt-submit",
+        "pre-tool-use",
+        "post-tool-use",
+        "stop",
+    }
 
     existing: dict[str, Any] = {}
     if hooks_path.exists():

@@ -9,12 +9,70 @@ import argparse
 import sys
 
 
+KNOWN_SUBCOMMANDS = {
+    "setup",
+    "doctor",
+    "exec",
+    "team",
+    "ralph",
+    "explore",
+    "autoresearch",
+    "list",
+    "cleanup",
+    "state",
+    "ask",
+    "agents",
+    "agents-init",
+    "deepinit",
+    "update",
+    "uninstall",
+    "session",
+    "sparkshell",
+    "hud",
+    "wiki",
+    "status",
+    "cancel",
+    "mcp-serve",
+    "help",
+    "resume",
+    "notepad",
+    "project-memory",
+    "trace",
+    "code-intel",
+    "version",
+}
+
+# Flags that get normalized and passed through to codex on bare launch
+CODEX_PASSTHROUGH_FLAGS = {
+    "--madmax": "--dangerously-bypass-approvals-and-sandbox",
+    "--high": "--high-reasoning",
+    "--xhigh": "--xhigh-reasoning",
+    "--spark": "--spark",
+    "--madmax-spark": "--madmax-spark",
+}
+
+
 def main(argv: list[str] | None = None) -> None:
     """Parse CLI arguments and dispatch to the appropriate subcommand handler.
 
     Args:
         argv: Command-line arguments (defaults to sys.argv if None).
     """
+    raw_args = argv if argv is not None else sys.argv[1:]
+
+    # Intercept bare launch: no subcommand, or first arg is a flag/unknown
+    if not raw_args or (
+        raw_args[0].startswith("-") and raw_args[0] not in ("--version", "--help", "-h")
+    ):
+        _handle_launch_raw(raw_args)
+        return
+
+    # Check if first arg is a known subcommand
+    if raw_args[0] not in KNOWN_SUBCOMMANDS and not raw_args[0].startswith("-"):
+        # Unknown first arg — treat as bare launch with passthrough
+        _handle_launch_raw(raw_args)
+        return
+
     parser = argparse.ArgumentParser(
         prog="omx",
         description="Multi-agent orchestration layer for OpenAI Codex CLI",
@@ -68,6 +126,9 @@ def main(argv: list[str] | None = None) -> None:
         "explore", help="Read-only repository exploration"
     )
     sp_explore.add_argument("--prompt", help="Exploration prompt")
+
+    # --- resume ---
+    subparsers.add_parser("resume", help="Resume previous interactive session")
 
     # --- autoresearch ---
     sp_autoresearch = subparsers.add_parser(
@@ -162,16 +223,146 @@ def main(argv: list[str] | None = None) -> None:
     sp_mcp = subparsers.add_parser("mcp-serve", help="Launch stdio MCP server target")
     sp_mcp.add_argument("target", nargs="?", help="Server target name")
 
+    # --- notepad ---
+    sp_notepad = subparsers.add_parser(
+        "notepad", help="CLI parity for notepad MCP tools"
+    )
+    sp_notepad.add_argument(
+        "action", nargs="?", choices=["read", "write", "append"], default="read"
+    )
+    sp_notepad.add_argument("text", nargs="?")
+
+    # --- project-memory ---
+    sp_pm = subparsers.add_parser(
+        "project-memory", help="CLI parity for project-memory MCP tools"
+    )
+    sp_pm.add_argument(
+        "action",
+        nargs="?",
+        choices=["read", "write", "add-note", "add-directive"],
+        default="read",
+    )
+    sp_pm.add_argument("text", nargs="?")
+
+    # --- trace ---
+    sp_trace = subparsers.add_parser("trace", help="CLI parity for trace MCP tools")
+    sp_trace.add_argument("action", nargs="?", choices=["list", "read"], default="list")
+    sp_trace.add_argument("--last", type=int, default=20)
+
+    # --- code-intel ---
+    sp_ci = subparsers.add_parser(
+        "code-intel", help="CLI parity for code-intel MCP tools"
+    )
+    sp_ci.add_argument(
+        "action", nargs="?", choices=["symbols", "diagnostics"], default="symbols"
+    )
+    sp_ci.add_argument("file", nargs="?")
+
+    # --- version ---
+    subparsers.add_parser("version", help="Show version info")
+
     # --- help ---
     subparsers.add_parser("help", help="Show help")
 
     args = parser.parse_args(argv)
 
-    if args.command is None or args.command == "help":
+    if args.command is None:
+        parser.print_help()
+        sys.exit(0)
+
+    if args.command == "help":
         parser.print_help()
         sys.exit(0)
 
     _dispatch(args)
+
+
+def _handle_launch_raw(raw_args: list[str]) -> None:
+    """Launch Codex with OMX overlay, handling passthrough flags.
+
+    Normalizes OMX-specific flags (--madmax, --high, etc.) to their
+    Codex equivalents and passes them through.
+
+    Args:
+        raw_args: Raw command-line arguments before argparse.
+    """
+    import os
+    import subprocess
+    import uuid
+
+    from omx.hooks.session import write_session_end, write_session_start
+    from omx.runtime.overlay import build_session_instructions
+    from omx.utils.platform import which
+
+    codex = which("codex") or which("claude")
+    if not codex:
+        print(
+            "Error: neither codex nor claude CLI found on PATH",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    cwd = os.getcwd()
+    session_id = uuid.uuid4().hex[:16]
+
+    # Build model instructions overlay
+    instructions_path = build_session_instructions(cwd, session_id)
+    write_session_start(cwd, session_id=session_id)
+
+    env = {**os.environ}
+    env["OMX_SESSION_ID"] = session_id
+    env["OMX_BYPASS_DEFAULT_SYSTEM_PROMPT"] = "1"
+    env["OMX_MODEL_INSTRUCTIONS_FILE"] = instructions_path
+
+    # Normalize passthrough flags
+    codex_args: list[str] = []
+    for arg in raw_args:
+        normalized = CODEX_PASSTHROUGH_FLAGS.get(arg)
+        if normalized:
+            codex_args.append(normalized)
+        else:
+            codex_args.append(arg)
+
+    cmd = [
+        str(codex),
+        "--config",
+        f'model_instructions_file="{instructions_path}"',
+        *codex_args,
+    ]
+
+    # If in tmux, create a split pane with HUD watch below
+    if os.environ.get("TMUX"):
+        _launch_hud_pane(cwd)
+
+    result = subprocess.run(cmd, env=env, check=False)
+    write_session_end(cwd, session_id)
+    sys.exit(result.returncode)
+
+
+def _launch_hud_pane(cwd: str) -> None:
+    """Create a tmux split pane running the HUD watch.
+
+    Args:
+        cwd: Working directory for the HUD pane.
+    """
+    import subprocess
+
+    try:
+        subprocess.run(
+            [
+                "tmux",
+                "split-window",
+                "-v",
+                "-l",
+                "3",
+                "-d",
+                f"cd {cwd} && python -m omx hud --watch",
+            ],
+            check=False,
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        pass  # tmux not available despite $TMUX being set
 
 
 def _dispatch(args: argparse.Namespace) -> None:
@@ -208,6 +399,13 @@ def _dispatch(args: argparse.Namespace) -> None:
             _handle_ralph(args)
         case "explore":
             _handle_explore(args)
+        case "resume":
+            _handle_resume()
+        case "autoresearch":
+            print("omx autoresearch is deprecated.")
+            print("Use the $autoresearch skill keyword instead:")
+            print("  In a Codex session, type: $autoresearch <task>")
+            sys.exit(0)
         case "agents-init" | "deepinit":
             _handle_agents_init(args)
         case "agents":
@@ -230,6 +428,18 @@ def _dispatch(args: argparse.Namespace) -> None:
             _handle_ask(args)
         case "wiki":
             _handle_wiki(args)
+        case "notepad":
+            _handle_notepad(args)
+        case "project-memory":
+            _handle_project_memory(args)
+        case "trace":
+            _handle_trace(args)
+        case "code-intel":
+            _handle_code_intel(args)
+        case "version":
+            from omx import __version__
+
+            print(f"omx {__version__}")
         case _:
             print(f"Unknown command: '{args.command}'", file=sys.stderr)
             sys.exit(1)
@@ -353,14 +563,25 @@ def _handle_mcp_serve(args: argparse.Namespace) -> None:
 
 
 def _handle_team(args: argparse.Namespace) -> None:
-    """Spawn parallel worker panes in tmux with CLI sessions.
+    """Spawn parallel worker panes in tmux, or manage existing teams.
 
-    Creates a tmux session, launches codex/claude in each worker pane,
-    waits for readiness, then dispatches tasks via inbox files and
-    tmux send-keys trigger injection.
+    Subcommands via spec position:
+    - omx team 3:executor --prompt "task"  → spawn workers
+    - omx team status [team-name]          → show team status
+    - omx team shutdown [team-name]        → kill team session
     """
     import os
     from datetime import datetime, timezone
+
+    spec = args.spec or ""
+
+    # Handle team subcommands
+    if spec == "status":
+        _handle_team_status()
+        return
+    if spec == "shutdown":
+        _handle_team_shutdown()
+        return
 
     from omx.team.contracts import TeamTask, TeamWorker
     from omx.team.runtime import assign_pending_tasks
@@ -459,41 +680,257 @@ def _handle_team(args: argparse.Namespace) -> None:
         write_tasks(cwd, tasks, team_name)
         assigned = assign_pending_tasks(cwd, team_name)
         print(f"Dispatched {len(assigned)} tasks to workers.")
+    else:
+        print("Workers ready. Send tasks with: omx team dispatch --prompt '...'")
 
     print(f"\nTeam session: {session_name}")
     print(f"Workers: {', '.join(w.worker_id for w in workers)}")
     print(f"Attach with: tmux attach -t {session_name}")
 
 
+def _handle_team_status() -> None:
+    """Show status of the most recent team."""
+    from pathlib import Path
+
+    from omx.team.runtime import monitor_team
+
+    cwd = str(Path.cwd())
+    team_dir = Path(cwd) / ".omx" / "team"
+    if not team_dir.exists():
+        print("No teams found.")
+        return
+
+    # Find most recent team
+    teams = sorted(
+        (d.name for d in team_dir.iterdir() if d.is_dir()),
+        reverse=True,
+    )
+    if not teams:
+        print("No teams found.")
+        return
+
+    team_name = teams[0]
+    snapshot = monitor_team(cwd, team_name)
+    tasks = snapshot.get("tasks", {})
+    workers = snapshot.get("workers", [])
+
+    print(f"Team: {team_name}")
+    print(
+        f"Tasks: {tasks.get('total', 0)} total, "
+        f"{tasks.get('pending', 0)} pending, "
+        f"{tasks.get('in_progress', 0)} in progress, "
+        f"{tasks.get('completed', 0)} completed, "
+        f"{tasks.get('failed', 0)} failed"
+    )
+    for w in workers:
+        status = w.get("status", "unknown")
+        alive = "alive" if w.get("alive") else "DEAD"
+        task = w.get("current_task", "-")
+        print(f"  {w['name']:15s} {status:10s} {alive:5s} task={task}")
+
+    if snapshot.get("all_tasks_terminal"):
+        print("\nAll tasks complete.")
+
+
+def _handle_team_shutdown() -> None:
+    """Shutdown the most recent team session."""
+    from pathlib import Path
+
+    from omx.team.tmux_session import kill_team_session
+
+    cwd = str(Path.cwd())
+    team_dir = Path(cwd) / ".omx" / "team"
+    if not team_dir.exists():
+        print("No teams found.")
+        return
+
+    teams = sorted(
+        (d.name for d in team_dir.iterdir() if d.is_dir()),
+        reverse=True,
+    )
+    if not teams:
+        print("No teams found.")
+        return
+
+    team_name = teams[0]
+    session_name = f"omx-{team_name}"
+    kill_team_session(session_name)
+    print(f"Killed team session: {session_name}")
+
+
 def _handle_ralph(args: argparse.Namespace) -> None:
-    """Launch ralph persistence mode."""
+    """Launch ralph persistence mode.
+
+    Writes ralph state, ensures artifacts, builds session instructions,
+    and launches an interactive codex/claude session.
+    """
+    import subprocess
+    from pathlib import Path
+
     from omx.ralph.persistence import ensure_canonical_ralph_artifacts
     from omx.state.operations import state_write
     from omx.state.paths import resolve_working_directory
+    from omx.utils.platform import which
 
     cwd = str(resolve_working_directory())
     ensure_canonical_ralph_artifacts(cwd)
 
-    fields = {"active": True, "current_phase": "investigate"}
-    if args.prompt:
-        fields["task_description"] = args.prompt
+    task = args.prompt or "No specific task provided — explore and investigate."
 
-    result = state_write("ralph", cwd, fields)
+    fields: dict[str, object] = {
+        "active": True,
+        "current_phase": "investigate",
+        "task_description": task,
+    }
+
+    state_write("ralph", cwd, fields)
+
+    # Build ralph session instructions
+    instructions = (
+        "You are in OMX Ralph persistence mode.\n"
+        f"Primary task: {task}\n"
+        "\n"
+        "Follow the Ralph workflow phases:\n"
+        "1. Investigate — understand the problem, explore the codebase\n"
+        "2. Plan — create a detailed implementation plan\n"
+        "3. Execute — implement the plan with tests\n"
+        "4. Verify — run tests, check quality, ensure completion\n"
+        "\n"
+        "Report your current phase progress. "
+        "When one phase is complete, transition to the next.\n"
+    )
+
+    # Write session model instructions
+    omx_dir = Path(cwd) / ".omx"
+    omx_dir.mkdir(parents=True, exist_ok=True)
+    instructions_path = omx_dir / "ralph-instructions.md"
+    instructions_path.write_text(instructions, encoding="utf-8")
+
     print("Ralph mode activated (phase: investigate)")
-    if args.prompt:
-        print(f"Task: {args.prompt}")
-    print("State written to:", result.get("path", ""))
+    print(f"Task: {task}")
+
+    # Find and launch codex/claude
+    codex = which("codex") or which("claude")
+    if not codex:
+        print(
+            "Error: neither codex nor claude CLI found on PATH",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    cmd = [str(codex), "--instructions", str(instructions_path)]
+    subprocess.run(cmd, check=False)
 
 
 def _handle_explore(args: argparse.Namespace) -> None:
-    """Run read-only exploration."""
+    """Run read-only exploration via codex/claude.
+
+    Launches an interactive session with read-only constraints and
+    the user's exploration prompt.
+    """
+    import subprocess
+    from pathlib import Path
+
+    from omx.utils.paths import package_root
+    from omx.utils.platform import which
+
     if not args.prompt:
         print("Error: --prompt is required for explore mode", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Explore mode: {args.prompt}")
-    print("(Read-only exploration would invoke codex/claude with explore agent prompt)")
-    print("Allowed commands: ls, cat, grep, rg, find, git log/diff/status, etc.")
+    codex = which("codex") or which("claude")
+    if not codex:
+        print(
+            "Error: neither codex nor claude CLI found on PATH",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Build explore instructions
+    explore_asset = package_root() / "assets" / "prompts" / "explore.md"
+    if explore_asset.exists():
+        base_instructions = explore_asset.read_text(encoding="utf-8")
+    else:
+        base_instructions = ""
+
+    explore_prompt = (
+        "You are in read-only exploration mode. "
+        "Do not modify any files. "
+        "Only use read-only commands "
+        "(ls, cat, grep, find, git log/status/diff). "
+        f"Answer the following: {args.prompt}"
+    )
+
+    instructions = (
+        f"{base_instructions}\n\n{explore_prompt}"
+        if base_instructions
+        else explore_prompt
+    )
+
+    # Write session model instructions
+    cwd = Path.cwd()
+    omx_dir = cwd / ".omx"
+    omx_dir.mkdir(parents=True, exist_ok=True)
+    instructions_path = omx_dir / "explore-instructions.md"
+    instructions_path.write_text(instructions, encoding="utf-8")
+
+    cmd = [str(codex), "--instructions", str(instructions_path)]
+    subprocess.run(cmd, check=False)
+
+
+def _handle_resume() -> None:
+    """Resume a previous interactive session.
+
+    Reads session state from .omx/session.json, checks whether the
+    previous process is still alive, and relaunches codex with the
+    last session instructions if the process has exited.
+    """
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    from omx.utils.platform import which
+
+    cwd = Path.cwd()
+    session_file = cwd / ".omx" / "session.json"
+
+    if not session_file.exists():
+        print("Error: no previous session found (.omx/session.json missing)")
+        sys.exit(1)
+
+    try:
+        session = json.loads(session_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"Error: could not read session state: {exc}")
+        sys.exit(1)
+
+    pid = session.get("pid")
+    if pid is not None:
+        try:
+            os.kill(pid, 0)
+            print(f"Session still running (PID {pid})")
+            return
+        except (OSError, ProcessLookupError):
+            pass  # Process is dead, we can resume
+
+    # Rebuild and relaunch
+    codex = which("codex") or which("claude")
+    if not codex:
+        print(
+            "Error: neither codex nor claude CLI found on PATH",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    instructions_path = session.get("instructions_path", "")
+    cmd = [str(codex)]
+    if instructions_path and Path(instructions_path).exists():
+        cmd.extend(["--instructions", instructions_path])
+
+    print("Resuming previous session...")
+    result = subprocess.run(cmd, check=False)
+    sys.exit(result.returncode)
 
 
 def _handle_agents_init(args: argparse.Namespace) -> None:
@@ -549,9 +986,19 @@ def _handle_agents(args: argparse.Namespace) -> None:
 
 
 def _handle_exec(args: argparse.Namespace) -> None:
-    """Run codex exec non-interactively."""
-    import subprocess
+    """Run codex exec non-interactively with OMX overlay.
 
+    Builds session instructions, sets OMX environment variables,
+    and passes model instructions to the codex/claude exec command.
+
+    Args:
+        args: Parsed CLI arguments with prompt and optional model.
+    """
+    import os
+    import subprocess
+    import uuid
+
+    from omx.runtime.overlay import build_session_instructions
     from omx.utils.platform import which
 
     codex = which("codex") or which("claude")
@@ -564,11 +1011,28 @@ def _handle_exec(args: argparse.Namespace) -> None:
         print("Error: prompt is required for exec mode", file=sys.stderr)
         sys.exit(1)
 
+    cwd = os.getcwd()
+    session_id = uuid.uuid4().hex[:16]
+
+    # Build session instructions overlay
+    instructions_path = build_session_instructions(cwd, session_id)
+
+    # Build environment with OMX session context
+    env = {**os.environ}
+    env["OMX_SESSION_ID"] = session_id
+    env["OMX_MODEL_INSTRUCTIONS_FILE"] = instructions_path
+
     cmd = [str(codex), "exec", prompt]
+    cmd.extend(
+        [
+            "--config",
+            f'model_instructions_file="{instructions_path}"',
+        ]
+    )
     if args.model:
         cmd.extend(["--model", args.model])
 
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
     if result.stdout:
         print(result.stdout, end="")
     if result.returncode != 0 and result.stderr:
@@ -759,3 +1223,119 @@ def _handle_wiki(args: argparse.Namespace) -> None:
             else:
                 print(f"Wiki: {len(pages)} entries in {wiki_dir}")
                 print("Commands: omx wiki [list|read|write|search]")
+
+
+def _handle_notepad(args: argparse.Namespace) -> None:
+    """CLI parity for notepad MCP tools."""
+    import json
+    import os
+
+    from omx.mcp.memory_server import handle_tool_call
+
+    cwd = os.getcwd()
+    match args.action:
+        case "read":
+            result = handle_tool_call("notepad_read", {"workingDirectory": cwd})
+            print(json.loads(result["content"][0]["text"]).get("content", "(empty)"))
+        case "write":
+            if not args.text:
+                print("Error: text required for notepad write", file=sys.stderr)
+                sys.exit(1)
+            handle_tool_call(
+                "notepad_write_working", {"workingDirectory": cwd, "content": args.text}
+            )
+            print("Written.")
+        case "append":
+            if not args.text:
+                print("Error: text required for notepad append", file=sys.stderr)
+                sys.exit(1)
+            handle_tool_call(
+                "notepad_write_working", {"workingDirectory": cwd, "content": args.text}
+            )
+            print("Appended.")
+
+
+def _handle_project_memory(args: argparse.Namespace) -> None:
+    """CLI parity for project-memory MCP tools."""
+    import json
+    import os
+
+    from omx.mcp.memory_server import handle_tool_call
+
+    cwd = os.getcwd()
+    match args.action:
+        case "read":
+            result = handle_tool_call("project_memory_read", {"workingDirectory": cwd})
+            text = json.loads(result["content"][0]["text"])
+            print(json.dumps(text, indent=2))
+        case "write":
+            if not args.text:
+                print("Error: text required", file=sys.stderr)
+                sys.exit(1)
+            handle_tool_call(
+                "project_memory_write", {"workingDirectory": cwd, "content": args.text}
+            )
+            print("Written.")
+        case "add-note":
+            if not args.text:
+                print("Error: note text required", file=sys.stderr)
+                sys.exit(1)
+            handle_tool_call(
+                "project_memory_add_note", {"workingDirectory": cwd, "note": args.text}
+            )
+            print("Note added.")
+        case "add-directive":
+            if not args.text:
+                print("Error: directive text required", file=sys.stderr)
+                sys.exit(1)
+            handle_tool_call(
+                "project_memory_add_directive",
+                {"workingDirectory": cwd, "directive": args.text},
+            )
+            print("Directive added.")
+
+
+def _handle_trace(args: argparse.Namespace) -> None:
+    """CLI parity for trace MCP tools."""
+    import json
+    import os
+
+    from omx.mcp.trace_server import handle_tool_call
+
+    cwd = os.getcwd()
+    result = handle_tool_call(
+        "trace_timeline", {"workingDirectory": cwd, "last": args.last}
+    )
+    text = json.loads(result["content"][0]["text"])
+    if isinstance(text, list):
+        for entry in text:
+            ts = entry.get("timestamp", "?")
+            event = entry.get("event", "?")
+            print(f"  {ts:25s} {event}")
+    else:
+        print(json.dumps(text, indent=2))
+
+
+def _handle_code_intel(args: argparse.Namespace) -> None:
+    """CLI parity for code-intel MCP tools."""
+    import json
+    import os
+
+    from omx.mcp.code_intel_server import handle_tool_call
+
+    cwd = os.getcwd()
+    match args.action:
+        case "symbols":
+            tool_args = {"workingDirectory": cwd}
+            if args.file:
+                tool_args["file"] = args.file
+            result = handle_tool_call("lsp_document_symbols", tool_args)
+            text = json.loads(result["content"][0]["text"])
+            if isinstance(text, list):
+                for sym in text:
+                    print(f"  {sym.get('kind', '?'):12s} {sym.get('name', '?')}")
+            else:
+                print(json.dumps(text, indent=2))
+        case "diagnostics":
+            result = handle_tool_call("lsp_diagnostics", {"workingDirectory": cwd})
+            print(json.loads(result["content"][0]["text"]))
