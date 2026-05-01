@@ -50,13 +50,40 @@ def run_doctor(
         else:
             checks_failed += 1
 
-    # Check codex CLI
-    codex_path = which("codex")
-    check(
-        "Codex CLI installed",
-        codex_path is not None,
-        str(codex_path) if codex_path else "not found on PATH",
-    )
+    # Check provider CLI (codex preferred, claude supported, OMX_CLI overrides)
+    import os
+
+    from omx.utils.platform import UnsupportedCliError, resolve_cli
+
+    forced = (os.environ.get("OMX_CLI") or "").strip().lower()
+    try:
+        resolved = resolve_cli()
+    except UnsupportedCliError as e:
+        resolved = None
+        check(
+            "Provider CLI (codex|claude)",
+            False,
+            f"OMX_CLI={str(e)!r} is not supported",
+        )
+    else:
+        if resolved is not None:
+            path, name = resolved
+            label = f"{name} ({path})"
+            if forced:
+                label += f" [OMX_CLI={forced!r}]"
+            check("Provider CLI (codex|claude)", True, label)
+        elif forced:
+            check(
+                "Provider CLI (codex|claude)",
+                False,
+                f"OMX_CLI={forced!r} not found on PATH",
+            )
+        else:
+            check(
+                "Provider CLI (codex|claude)",
+                False,
+                "neither codex nor claude on PATH",
+            )
 
     # Check Python version
     py_version = (

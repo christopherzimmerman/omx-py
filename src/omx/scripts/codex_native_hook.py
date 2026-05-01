@@ -54,7 +54,11 @@ def main() -> None:
         event_type = event_data.get("event", "unknown")
 
     cwd = os.environ.get("OMX_CWD", os.getcwd())
-    session_id = os.environ.get("OMX_SESSION_ID", "")
+    # Prefer the omx-launched session id; fall back to the provider's session
+    # id from the hook payload (claude includes session_id in every event).
+    session_id = os.environ.get("OMX_SESSION_ID") or str(
+        event_data.get("session_id") or ""
+    )
 
     try:
         _dispatch_event(event_type, event_data, cwd, session_id)

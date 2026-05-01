@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 
 KNOWN_SUBCOMMANDS = {
@@ -96,6 +97,12 @@ def main(argv: list[str] | None = None) -> None:
         choices=["user", "project"],
         default="user",
         help="Installation scope (default: user)",
+    )
+    sp_setup.add_argument(
+        "--target",
+        choices=["codex", "claude"],
+        default=None,
+        help="Provider CLI target (default: $OMX_CLI or codex)",
     )
     sp_setup.add_argument("--verbose", action="store_true")
 
@@ -197,7 +204,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # --- sparkshell ---
     sp_spark = subparsers.add_parser("sparkshell", help="Native sparkshell sidecar")
-    sp_spark.add_argument("command", nargs=argparse.REMAINDER)
+    sp_spark.add_argument("argv", nargs=argparse.REMAINDER)
     sp_spark.add_argument("--tmux-pane", help="Target tmux pane")
     sp_spark.add_argument("--tail-lines", type=int, default=80)
 
@@ -277,6 +284,41 @@ def main(argv: list[str] | None = None) -> None:
     _dispatch(args)
 
 
+def _resolve_cli_or_exit() -> tuple[Path, str]:
+    """Resolve the active provider CLI or exit with an error.
+
+    Respects ``OMX_CLI``; otherwise prefers codex, then claude.
+    """
+    import os
+
+    from omx.utils.platform import UnsupportedCliError, resolve_cli
+
+    try:
+        resolved = resolve_cli()
+    except UnsupportedCliError as e:
+        print(
+            f"Error: OMX_CLI={str(e)!r} is not supported (use 'codex' or 'claude').",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if resolved is None:
+        forced = (os.environ.get("OMX_CLI") or "").strip().lower()
+        if forced:
+            print(
+                f"Error: OMX_CLI={forced!r} but '{forced}' was not found on PATH.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Error: neither codex nor claude CLI found on PATH. "
+                "Install one, or set OMX_CLI to select a provider.",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+    return resolved
+
+
 def _handle_launch_raw(raw_args: list[str]) -> None:
     """Launch Codex with OMX overlay, handling passthrough flags.
 
@@ -289,18 +331,12 @@ def _handle_launch_raw(raw_args: list[str]) -> None:
     import os
     import subprocess
     import uuid
+    from pathlib import Path
 
     from omx.hooks.session import write_session_end, write_session_start
     from omx.runtime.overlay import build_session_instructions
-    from omx.utils.platform import which
 
-    codex = which("codex") or which("claude")
-    if not codex:
-        print(
-            "Error: neither codex nor claude CLI found on PATH",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    codex, cli_name = _resolve_cli_or_exit()
 
     cwd = os.getcwd()
     session_id = uuid.uuid4().hex[:16]
@@ -323,12 +359,23 @@ def _handle_launch_raw(raw_args: list[str]) -> None:
         else:
             codex_args.append(arg)
 
-    cmd = [
-        str(codex),
-        "--config",
-        f'model_instructions_file="{instructions_path}"',
-        *codex_args,
-    ]
+    if cli_name == "claude":
+        try:
+            instructions_text = Path(instructions_path).read_text(encoding="utf-8")
+        except OSError:
+            instructions_text = ""
+        cmd = [str(codex)]
+        if instructions_text:
+            cmd.extend(["--append-system-prompt", instructions_text])
+        cmd.extend(codex_args)
+    else:
+        escaped = instructions_path.replace("\\", "\\\\").replace('"', '\\"')
+        cmd = [
+            str(codex),
+            "-c",
+            f'model_instructions_file="{escaped}"',
+            *codex_args,
+        ]
 
     # If in tmux, create a split pane with HUD watch below
     if os.environ.get("TMUX"):
@@ -369,13 +416,15 @@ def _dispatch(args: argparse.Namespace) -> None:
     """Route to the appropriate command handler."""
     match args.command:
         case "setup":
-            from omx.cli.setup import run_setup
+            from omx.cli.setup import SetupTarget, run_setup
 
+            target = SetupTarget(args.target) if args.target else None
             run_setup(
                 force=args.force,
                 dry_run=args.dry_run,
                 scope=args.scope,
                 verbose=args.verbose,
+                target=target,
             )
         case "doctor":
             from omx.cli.doctor import run_doctor
@@ -770,7 +819,6 @@ def _handle_ralph(args: argparse.Namespace) -> None:
     from omx.ralph.persistence import ensure_canonical_ralph_artifacts
     from omx.state.operations import state_write
     from omx.state.paths import resolve_working_directory
-    from omx.utils.platform import which
 
     cwd = str(resolve_working_directory())
     ensure_canonical_ralph_artifacts(cwd)
@@ -809,72 +857,82 @@ def _handle_ralph(args: argparse.Namespace) -> None:
     print("Ralph mode activated (phase: investigate)")
     print(f"Task: {task}")
 
-    # Find and launch codex/claude
-    codex = which("codex") or which("claude")
-    if not codex:
-        print(
-            "Error: neither codex nor claude CLI found on PATH",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    codex, cli_name = _resolve_cli_or_exit()
 
-    cmd = [str(codex), "--instructions", str(instructions_path)]
+    if cli_name == "claude":
+        cmd = [str(codex), "--append-system-prompt", instructions]
+    else:
+        escaped = str(instructions_path).replace("\\", "\\\\").replace('"', '\\"')
+        cmd = [
+            str(codex),
+            "-c",
+            f'model_instructions_file="{escaped}"',
+        ]
     subprocess.run(cmd, check=False)
 
 
 def _handle_explore(args: argparse.Namespace) -> None:
     """Run read-only exploration via codex/claude.
 
-    Launches an interactive session with read-only constraints and
-    the user's exploration prompt.
+    One-shot read-only exploration: instructions are passed as a system
+    prompt (codex via `-c model_instructions_file=...`, claude via
+    `--append-system-prompt`) and the user's prompt is run non-interactively.
     """
     import subprocess
     from pathlib import Path
 
     from omx.utils.paths import package_root
-    from omx.utils.platform import which
 
     if not args.prompt:
         print("Error: --prompt is required for explore mode", file=sys.stderr)
         sys.exit(1)
 
-    codex = which("codex") or which("claude")
-    if not codex:
-        print(
-            "Error: neither codex nor claude CLI found on PATH",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    codex, cli_name = _resolve_cli_or_exit()
 
-    # Build explore instructions
     explore_asset = package_root() / "assets" / "prompts" / "explore.md"
-    if explore_asset.exists():
-        base_instructions = explore_asset.read_text(encoding="utf-8")
-    else:
-        base_instructions = ""
+    base_instructions = (
+        explore_asset.read_text(encoding="utf-8") if explore_asset.exists() else ""
+    )
 
-    explore_prompt = (
+    read_only_preamble = (
         "You are in read-only exploration mode. "
         "Do not modify any files. "
         "Only use read-only commands "
-        "(ls, cat, grep, find, git log/status/diff). "
-        f"Answer the following: {args.prompt}"
+        "(ls, cat, grep, find, git log/status/diff)."
     )
-
-    instructions = (
-        f"{base_instructions}\n\n{explore_prompt}"
+    system_instructions = (
+        f"{base_instructions}\n\n{read_only_preamble}"
         if base_instructions
-        else explore_prompt
+        else read_only_preamble
     )
 
-    # Write session model instructions
     cwd = Path.cwd()
     omx_dir = cwd / ".omx"
     omx_dir.mkdir(parents=True, exist_ok=True)
     instructions_path = omx_dir / "explore-instructions.md"
-    instructions_path.write_text(instructions, encoding="utf-8")
+    instructions_path.write_text(
+        f"{system_instructions}\n\nTask: {args.prompt}\n",
+        encoding="utf-8",
+    )
 
-    cmd = [str(codex), "--instructions", str(instructions_path)]
+    if cli_name == "claude":
+        cmd = [
+            str(codex),
+            "--append-system-prompt",
+            system_instructions,
+            "--print",
+            args.prompt,
+        ]
+    else:
+        escaped = str(instructions_path).replace("\\", "\\\\").replace('"', '\\"')
+        cmd = [
+            str(codex),
+            "-c",
+            f'model_instructions_file="{escaped}"',
+            "exec",
+            args.prompt,
+        ]
+
     subprocess.run(cmd, check=False)
 
 
@@ -889,8 +947,6 @@ def _handle_resume() -> None:
     import os
     import subprocess
     from pathlib import Path
-
-    from omx.utils.platform import which
 
     cwd = Path.cwd()
     session_file = cwd / ".omx" / "session.json"
@@ -915,18 +971,21 @@ def _handle_resume() -> None:
             pass  # Process is dead, we can resume
 
     # Rebuild and relaunch
-    codex = which("codex") or which("claude")
-    if not codex:
-        print(
-            "Error: neither codex nor claude CLI found on PATH",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    codex, cli_name = _resolve_cli_or_exit()
 
     instructions_path = session.get("instructions_path", "")
     cmd = [str(codex)]
     if instructions_path and Path(instructions_path).exists():
-        cmd.extend(["--instructions", instructions_path])
+        if cli_name == "claude":
+            cmd.extend(
+                [
+                    "--append-system-prompt",
+                    Path(instructions_path).read_text(encoding="utf-8"),
+                ]
+            )
+        else:
+            escaped = instructions_path.replace("\\", "\\\\").replace('"', '\\"')
+            cmd.extend(["-c", f'model_instructions_file="{escaped}"'])
 
     print("Resuming previous session...")
     result = subprocess.run(cmd, check=False)
@@ -997,14 +1056,11 @@ def _handle_exec(args: argparse.Namespace) -> None:
     import os
     import subprocess
     import uuid
+    from pathlib import Path
 
     from omx.runtime.overlay import build_session_instructions
-    from omx.utils.platform import which
 
-    codex = which("codex") or which("claude")
-    if not codex:
-        print("Error: neither codex nor claude CLI found on PATH", file=sys.stderr)
-        sys.exit(1)
+    codex, cli_name = _resolve_cli_or_exit()
 
     prompt = args.prompt
     if not prompt:
@@ -1022,15 +1078,28 @@ def _handle_exec(args: argparse.Namespace) -> None:
     env["OMX_SESSION_ID"] = session_id
     env["OMX_MODEL_INSTRUCTIONS_FILE"] = instructions_path
 
-    cmd = [str(codex), "exec", prompt]
-    cmd.extend(
-        [
-            "--config",
-            f'model_instructions_file="{instructions_path}"',
+    if cli_name == "claude":
+        try:
+            instructions_text = Path(instructions_path).read_text(encoding="utf-8")
+        except OSError:
+            instructions_text = ""
+        cmd = [str(codex), "--print"]
+        if instructions_text:
+            cmd.extend(["--append-system-prompt", instructions_text])
+        if args.model:
+            cmd.extend(["--model", args.model])
+        cmd.append(prompt)
+    else:
+        escaped = instructions_path.replace("\\", "\\\\").replace('"', '\\"')
+        cmd = [
+            str(codex),
+            "-c",
+            f'model_instructions_file="{escaped}"',
+            "exec",
         ]
-    )
-    if args.model:
-        cmd.extend(["--model", args.model])
+        if args.model:
+            cmd.extend(["--model", args.model])
+        cmd.append(prompt)
 
     result = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
     if result.stdout:
@@ -1044,11 +1113,11 @@ def _handle_sparkshell(args: argparse.Namespace) -> None:
     """Run sparkshell bounded command execution."""
     from omx.sparkshell.exec import execute_command
 
-    if not args.command:
+    if not args.argv:
         print("Error: command is required for sparkshell", file=sys.stderr)
         sys.exit(1)
 
-    result = execute_command(args.command, line_limit=args.tail_lines)
+    result = execute_command(args.argv, line_limit=args.tail_lines)
     if result.stdout:
         print(result.stdout)
     if result.stderr:

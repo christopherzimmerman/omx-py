@@ -99,7 +99,8 @@ class TestRalphWritesStateAndInstructions(unittest.TestCase):
                 # Codex should have been launched
                 mock_run.assert_called_once()
                 call_args = mock_run.call_args[0][0]
-                self.assertIn("--instructions", call_args)
+                self.assertIn("-c", call_args)
+                self.assertTrue(any("model_instructions_file=" in a for a in call_args))
 
 
 class TestExploreBuildInstructions(unittest.TestCase):

@@ -9,7 +9,7 @@ The system is a multi-agent orchestration harness that wraps Codex CLI (or Claud
 - Multi-agent team coordination via tmux
 - Plugin/hook extensibility
 - MCP (Model Context Protocol) servers for tool integration
-- Notification routing to external services
+- Local desktop notifications
 
 ## Module Dependency Graph
 
@@ -78,7 +78,7 @@ omx.cli (entry point)
  │   ├── allowlist.py    (standalone sets)
  │   └── harness.py      → explore.allowlist, sparkshell.exec
  │
- ├── omx.notifications   → urllib.request
+ ├── omx.notifications   → subprocess (osascript / notify-send / powershell)
  ├── omx.hud             → state.operations, hud.state
  ├── omx.ralph           → state.paths
  ├── omx.autoresearch    (standalone)

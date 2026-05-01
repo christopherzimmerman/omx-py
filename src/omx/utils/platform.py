@@ -63,3 +63,44 @@ def which(command: str) -> Path | None:
 
     result = shutil.which(command)
     return Path(result) if result else None
+
+
+SUPPORTED_CLIS = ("codex", "claude")
+
+
+class UnsupportedCliError(ValueError):
+    """Raised when OMX_CLI is set to a value other than codex or claude."""
+
+
+def resolve_cli(env: dict[str, str] | None = None) -> tuple[Path, str] | None:
+    """Resolve the active provider CLI (codex or claude).
+
+    Resolution order:
+      1. ``OMX_CLI`` env var (values: ``codex`` or ``claude``). If set but not
+         on PATH, returns None — fall back is not attempted, because the user
+         explicitly chose this CLI.
+      2. ``codex`` on PATH (default).
+      3. ``claude`` on PATH.
+
+    Args:
+        env: Environment dict to read OMX_CLI from. Defaults to os.environ.
+
+    Returns:
+        ``(path, cli_name)`` if a CLI was found, else ``None``.
+
+    Raises:
+        UnsupportedCliError: If OMX_CLI is set to an unsupported value.
+    """
+    env_map = env if env is not None else os.environ
+    forced = (env_map.get("OMX_CLI") or "").strip().lower()
+    if forced:
+        if forced not in SUPPORTED_CLIS:
+            raise UnsupportedCliError(forced)
+        path = which(forced)
+        return (path, forced) if path else None
+
+    for name in SUPPORTED_CLIS:
+        path = which(name)
+        if path:
+            return (path, name)
+    return None

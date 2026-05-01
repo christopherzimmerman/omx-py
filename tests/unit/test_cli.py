@@ -39,8 +39,11 @@ class TestCli(unittest.TestCase):
         # Either way it should NOT just print help anymore
         self.assertIn(result.returncode, (0, 1))
 
-    def test_unknown_command_fails(self):
-        result = self._run_omx("nonexistent_command")
+    def test_unknown_flag_fails(self):
+        # An unrecognized flag is passed through to codex/claude, which both
+        # reject unknown flags. (Unknown non-flag tokens are treated as a
+        # prompt by both CLIs, so this uses a flag form to guarantee failure.)
+        result = self._run_omx("--this-flag-does-not-exist")
         self.assertNotEqual(result.returncode, 0)
 
     def test_state_list(self):

@@ -46,8 +46,10 @@ omx help
 omx doctor
 
 # Install skills, prompts, and config
-omx setup
-omx setup --scope project   # project-local install
+omx setup                          # codex target (default), user scope
+omx setup --scope project          # project-local install (codex)
+omx setup --target claude          # install to ~/.claude/ for Claude CLI
+OMX_CLI=claude omx setup           # same, via env var
 
 # List available skills and prompts
 omx list
@@ -144,12 +146,8 @@ omx-py/
 │       ├── explore/            # Read-only exploration (port of Rust omx-explore)
 │       │   ├── allowlist.py    # Permitted commands
 │       │   └── harness.py      # Explore mode executor
-│       ├── notifications/      # External notification adapters
-│       │   ├── types.py        # Payload and result types
-│       │   ├── dispatcher.py   # Multi-provider dispatch
-│       │   ├── discord.py      # Discord webhook (urllib)
-│       │   ├── slack.py        # Slack webhook (urllib)
-│       │   └── telegram.py     # Telegram bot API (urllib)
+│       ├── notifications/      # Local desktop notifications
+│       │   └── notifier.py     # OS-native desktop notification dispatch
 │       ├── hud/                # Tmux statusline
 │       │   ├── state.py        # HUD state persistence
 │       │   └── renderer.py     # Statusline string rendering
@@ -172,7 +170,7 @@ omx-py/
 │           └── toml_read.py    # tomllib wrapper
 ├── assets/                     # Static content (skills, prompts, templates)
 └── tests/
-    └── unit/                   # 212 tests, all stdlib unittest
+    └── unit/                   # 520 tests, all stdlib unittest
 ```
 
 ## Architecture
@@ -198,7 +196,6 @@ omx-py/
 - **`asyncio` not used** — the codebase is synchronous; concurrency is via tmux subprocesses
 - **JSON-RPC over stdio** for MCP (~100 lines, replaces the entire MCP SDK)
 - **`tomllib`** for TOML reading (stdlib since 3.11), custom ~50-line writer
-- **`urllib.request`** for HTTP (notifications only)
 - **`subprocess`** for tmux and CLI invocation
 - **`ctypes.windll.kernel32`** for Windows PID checking (since `os.kill(pid, 0)` terminates on Windows)
 
@@ -223,7 +220,7 @@ To verify zero non-stdlib imports:
 grep -rn "^import\|^from" src/omx/ \
   | grep -v "__future__\|omx\.\|json\|os\|sys\|re\|signal\|time\|uuid\|shutil" \
   | grep -v "subprocess\|threading\|tempfile\|random\|argparse\|pathlib\|typing" \
-  | grep -v "dataclasses\|enum\|datetime\|tomllib\|fcntl\|msvcrt\|ctypes\|urllib"
+  | grep -v "dataclasses\|enum\|datetime\|tomllib\|fcntl\|msvcrt\|ctypes"
 ```
 
 Should return empty (or only `__pycache__` binary matches).
@@ -249,6 +246,7 @@ It speaks JSON-RPC 2.0 over stdio with Content-Length framing, compatible with a
 | Variable | Purpose |
 |----------|---------|
 | `CODEX_HOME` | Override Codex home directory (default: `~/.codex`) |
+| `OMX_CLI` | Force provider CLI: `codex` or `claude` (default: prefer `codex`, fall back to `claude`) |
 | `OMX_SESSION_ID` | Explicit session scope ID |
 | `OMX_TEAM_WORKER_CLI` | Worker CLI tool (`codex`, `claude`, `gemini`) |
 | `OMX_TEAM_WORKER_MODEL` | Worker model override |
@@ -256,10 +254,6 @@ It speaks JSON-RPC 2.0 over stdio with Content-Length framing, compatible with a
 | `OMX_MCP_WORKDIR_ROOTS` | Allowed working directory roots (path-separated) |
 | `OMX_HOOK_PLUGINS` | Enable/disable hook plugins (`0` to disable) |
 | `OMX_HOOK_PLUGIN_TIMEOUT_MS` | Plugin execution timeout (default: 1500ms) |
-| `OMX_DISCORD_WEBHOOK` | Discord notification webhook URL |
-| `OMX_SLACK_WEBHOOK` | Slack notification webhook URL |
-| `OMX_TELEGRAM_BOT_TOKEN` | Telegram bot token |
-| `OMX_TELEGRAM_CHAT_ID` | Telegram chat ID |
 | `OMX_MCP_SERVER_DISABLE_AUTO_START` | Disable all MCP auto-start (`1`) |
 | `OMX_STATE_SERVER_DISABLE_AUTO_START` | Disable state server auto-start (`1`) |
 

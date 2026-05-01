@@ -18,6 +18,10 @@ from typing import Any
 
 from omx.config.generator import merge_config, read_config, write_config
 from omx.utils.paths import (
+    claude_agents_dir,
+    claude_home,
+    claude_settings_path,
+    claude_skills_dir,
     codex_agents_dir,
     codex_config_path,
     codex_home,
@@ -47,6 +51,13 @@ class SetupInstallMode(StrEnum):
 
     LEGACY = "legacy"
     PLUGIN = "plugin"
+
+
+class SetupTarget(StrEnum):
+    """Provider CLI install target."""
+
+    CODEX = "codex"
+    CLAUDE = "claude"
 
 
 LEGACY_SCOPE_MIGRATION: dict[str, SetupScope] = {"project-local": SetupScope.PROJECT}
@@ -114,20 +125,28 @@ class ScopeDirectories:
     """Resolved directory paths for a setup scope.
 
     Attributes:
-        codex_config_file: Path to config.toml.
-        codex_home_dir: Codex home directory.
-        codex_hooks_file: Path to hooks.json.
-        native_agents_dir: Directory for native agent TOML files.
-        prompts_dir: Directory for agent prompt files.
+        target: Provider CLI target (codex or claude).
+        codex_config_file: Path to the settings file (config.toml for codex,
+            settings.json for claude).
+        codex_home_dir: Provider home directory (~/.codex or ~/.claude).
+        codex_hooks_file: Path to hooks.json (codex only; ignored for claude).
+        native_agents_dir: Codex native agent TOML directory; for claude this
+            is ~/.claude/agents where prompts land as markdown.
+        prompts_dir: Codex prompts directory (unused for claude — claude reads
+            role .md files from native_agents_dir).
         skills_dir: Directory for skill directories.
+        main_instructions_filename: Top-level instructions filename
+            (AGENTS.md for codex, CLAUDE.md for claude).
     """
 
+    target: SetupTarget
     codex_config_file: Path
     codex_home_dir: Path
     codex_hooks_file: Path
     native_agents_dir: Path
     prompts_dir: Path
     skills_dir: Path
+    main_instructions_filename: str = "AGENTS.md"
 
 
 @dataclass
@@ -149,34 +168,66 @@ class SkillFrontmatter:
 
 
 def resolve_scope_directories(
-    scope: SetupScope, project_root: Path
+    scope: SetupScope,
+    project_root: Path,
+    target: SetupTarget = SetupTarget.CODEX,
 ) -> ScopeDirectories:
-    """Resolve the directory layout for the given scope.
+    """Resolve the directory layout for the given scope and target.
 
     Args:
         scope: User or project scope.
         project_root: Root of the current project.
+        target: Provider CLI target (codex or claude).
 
     Returns:
         ScopeDirectories with all relevant paths populated.
     """
+    if target == SetupTarget.CLAUDE:
+        if scope == SetupScope.PROJECT:
+            home = project_root / ".claude"
+            return ScopeDirectories(
+                target=SetupTarget.CLAUDE,
+                codex_config_file=home / "settings.json",
+                codex_home_dir=home,
+                codex_hooks_file=home / "hooks.json",  # unused for claude
+                native_agents_dir=home / "agents",
+                prompts_dir=home / "agents",
+                skills_dir=home / "skills",
+                main_instructions_filename="CLAUDE.md",
+            )
+        return ScopeDirectories(
+            target=SetupTarget.CLAUDE,
+            codex_config_file=claude_settings_path(),
+            codex_home_dir=claude_home(),
+            codex_hooks_file=claude_home() / "hooks.json",  # unused for claude
+            native_agents_dir=claude_agents_dir(),
+            prompts_dir=claude_agents_dir(),
+            skills_dir=claude_skills_dir(),
+            main_instructions_filename="CLAUDE.md",
+        )
+
+    # Codex (default)
     if scope == SetupScope.PROJECT:
         home = project_root / ".codex"
         return ScopeDirectories(
+            target=SetupTarget.CODEX,
             codex_config_file=home / "config.toml",
             codex_home_dir=home,
             codex_hooks_file=home / "hooks.json",
             native_agents_dir=home / "agents",
             prompts_dir=home / "prompts",
             skills_dir=home / "skills",
+            main_instructions_filename="AGENTS.md",
         )
     return ScopeDirectories(
+        target=SetupTarget.CODEX,
         codex_config_file=codex_config_path(),
         codex_home_dir=codex_home(),
         codex_hooks_file=codex_home() / "hooks.json",
         native_agents_dir=codex_agents_dir(),
         prompts_dir=codex_prompts_dir(),
         skills_dir=user_skills_dir(),
+        main_instructions_filename="AGENTS.md",
     )
 
 
@@ -438,42 +489,87 @@ def _repair_config_toml(path: Path, *, verbose: bool = False) -> bool:
 MCP_TARGETS = ("state", "memory", "code_intel", "trace", "wiki")
 
 
-def _build_mcp_servers_section() -> dict[str, Any]:
-    """Build [mcp_servers] config entries for all OMX MCP servers.
+def _portable_python_executable() -> str:
+    """Return sys.executable with forward slashes on Windows.
 
-    Uses sys.executable to ensure the same Python that installed omx
-    is used to run the MCP servers, avoiding PATH issues.
+    Claude runs hook and MCP commands through ``/usr/bin/bash``, which
+    interprets backslashes in unquoted strings as escape sequences (e.g.
+    ``C:\\Users\\...`` becomes ``C:Users...``). Forward slashes work on
+    Windows Python and survive bash unescaped.
     """
-    import sys
+    import sys as _sys
 
+    return _sys.executable.replace("\\", "/")
+
+
+def _build_mcp_servers_section() -> dict[str, Any]:
+    """Build MCP server entries for all OMX MCP servers.
+
+    Same shape works for both Codex (under [mcp_servers] in TOML) and
+    Claude (under "mcpServers" in JSON settings).
+    """
     return {
         f"omx_{t}": {
-            "command": sys.executable,
+            "command": _portable_python_executable(),
             "args": ["-u", "-m", "omx", "mcp-serve", t],
         }
         for t in MCP_TARGETS
     }
 
 
+def _read_json_settings(path: Path) -> dict[str, Any]:
+    """Read a Claude settings.json file, returning {} if absent or invalid."""
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_json_settings(path: Path, settings: dict[str, Any]) -> None:
+    """Write a Claude settings.json file with stable formatting."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+
+
 def _ensure_mcp_servers(
-    config_path: Path,
+    scope_dirs: ScopeDirectories,
     *,
     dry_run: bool = False,
     verbose: bool = False,
 ) -> bool:
-    """Register OMX MCP servers in config.toml [mcp_servers].
+    """Register OMX MCP servers in the target's settings file.
 
-    Args:
-        config_path: Path to config.toml.
-        dry_run: If True, skip writing.
-        verbose: Print activity detail.
+    For codex: writes [mcp_servers] in config.toml.
+    For claude: writes "mcpServers" in settings.json.
 
     Returns:
-        True if the config was modified.
+        True if the settings file was modified.
     """
+    desired = _build_mcp_servers_section()
+    config_path = scope_dirs.codex_config_file
+
+    if scope_dirs.target == SetupTarget.CLAUDE:
+        settings = _read_json_settings(config_path)
+        existing = settings.get("mcpServers") or {}
+        if isinstance(existing, dict) and all(
+            existing.get(k) == v for k, v in desired.items()
+        ):
+            return False
+        merged = {**existing, **desired} if isinstance(existing, dict) else desired
+        settings["mcpServers"] = merged
+        if not dry_run:
+            _write_json_settings(config_path, settings)
+        if verbose:
+            print(
+                f"  {'would update' if dry_run else 'updated'} mcpServers in {config_path}"
+            )
+        return True
+
     config = read_config(config_path)
     mcp = config.get("mcp_servers", {})
-    desired = _build_mcp_servers_section()
     changed = any(mcp.get(k) != v for k, v in desired.items())
     if not changed:
         return False
@@ -490,6 +586,37 @@ def _ensure_mcp_servers(
 # ---------------------------------------------------------------------------
 # Native agent TOML generation & installation
 # ---------------------------------------------------------------------------
+
+
+def _install_claude_agents(
+    src: Path,
+    dest: Path,
+    summary: CategorySummary,
+    *,
+    force: bool = False,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> None:
+    """Install role prompt .md files as Claude subagents.
+
+    Copies ``assets/prompts/<role>.md`` to ``<dest>/<role>.md``. Claude reads
+    these as subagent definitions — the existing frontmatter (description /
+    argument-hint) is the right shape; we don't rewrite it here.
+    """
+    if not src.exists():
+        return
+    if not dry_run:
+        dest.mkdir(parents=True, exist_ok=True)
+    for md in sorted(src.glob("*.md")):
+        dst = dest / md.name
+        if dst.exists() and not force and md.read_bytes() == dst.read_bytes():
+            summary.unchanged += 1
+            continue
+        if verbose:
+            print(f"  {'would copy' if dry_run else 'copying'} subagent: {md.name}")
+        if not dry_run:
+            shutil.copy2(md, dst)
+        summary.updated += 1
 
 
 def _install_native_agents(
@@ -557,6 +684,98 @@ def _install_native_agents(
 # ---------------------------------------------------------------------------
 # Hooks registration
 # ---------------------------------------------------------------------------
+
+
+# Claude uses PascalCase hook event names; codex/omx use kebab-case.
+# The hook script accepts the codex (kebab-case) name as argv[1] regardless of
+# which CLI invoked it, so the script stays single-source.
+CLAUDE_HOOK_EVENTS: list[tuple[str, str]] = [
+    ("SessionStart", "session-start"),
+    ("UserPromptSubmit", "user-prompt-submit"),
+    ("PreToolUse", "pre-tool-use"),
+    ("PostToolUse", "post-tool-use"),
+    ("Stop", "stop"),
+]
+
+# Substring used to identify OMX-managed claude hook entries on rewrite.
+_OMX_HOOK_MARKER = "omx.scripts.codex_native_hook"
+
+
+def _ensure_claude_hooks(
+    settings_path: Path,
+    summary: CategorySummary,
+    *,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> None:
+    """Register OMX hooks in Claude's settings.json under the "hooks" key.
+
+    Claude's hook schema: ``hooks.<EventName>`` is a list of matcher entries,
+    each with a ``hooks`` array of ``{"type": "command", "command": "..."}``.
+
+    Entries containing ``omx.scripts.codex_native_hook`` are treated as
+    OMX-managed and replaced on each setup; other entries are preserved.
+    """
+    # Single-quote the path so bash handles spaces correctly.
+    hook_command_base = (
+        f"'{_portable_python_executable()}' -u -m omx.scripts.codex_native_hook"
+    )
+
+    existing = _read_json_settings(settings_path)
+    hooks_section: dict[str, Any] = existing.get("hooks") or {}
+    if not isinstance(hooks_section, dict):
+        hooks_section = {}
+
+    new_hooks: dict[str, list[Any]] = {}
+    for claude_event, codex_event in CLAUDE_HOOK_EVENTS:
+        prev = hooks_section.get(claude_event, [])
+        user_entries: list[Any] = []
+        if isinstance(prev, list):
+            for entry in prev:
+                if not isinstance(entry, dict):
+                    user_entries.append(entry)
+                    continue
+                # Drop entries that are clearly OMX-managed
+                inner = entry.get("hooks")
+                if isinstance(inner, list) and any(
+                    isinstance(h, dict)
+                    and _OMX_HOOK_MARKER in str(h.get("command", ""))
+                    for h in inner
+                ):
+                    continue
+                user_entries.append(entry)
+
+        omx_entry = {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{hook_command_base} {codex_event}",
+                }
+            ]
+        }
+        new_hooks[claude_event] = user_entries + [omx_entry]
+
+    # Preserve any non-managed event keys we don't override
+    for other_event, entries in hooks_section.items():
+        if other_event not in {ce for ce, _ in CLAUDE_HOOK_EVENTS}:
+            new_hooks[other_event] = entries
+
+    merged = {**existing, "hooks": new_hooks}
+    new_text = json.dumps(merged, indent=2) + "\n"
+
+    if settings_path.exists():
+        try:
+            if settings_path.read_text(encoding="utf-8") == new_text:
+                summary.unchanged += 1
+                return
+        except OSError:
+            pass
+
+    if verbose:
+        print(f"  {'would write' if dry_run else 'writing'} hooks: {settings_path}")
+    if not dry_run:
+        _write_json_settings(settings_path, merged)
+    summary.updated += 1
 
 
 def _ensure_hooks(
@@ -805,17 +1024,27 @@ def _ensure_config(
     dry_run: bool = False,
     verbose: bool = False,
 ) -> None:
-    """Ensure config.toml exists with required fields and MCP servers.
+    """Ensure the target's settings file exists with required fields.
 
-    Runs config repair, merges defaults, and registers MCP servers.
+    For codex: writes/repairs config.toml with `model`, MCP servers.
+    For claude: writes settings.json with mcpServers (no `model` field —
+    claude picks its model from CLI args / its own config).
     """
     config_path = scope_dirs.codex_config_file
+
+    if scope_dirs.target == SetupTarget.CLAUDE:
+        if _ensure_mcp_servers(scope_dirs, dry_run=dry_run, verbose=verbose):
+            summary.updated += 1
+        else:
+            summary.unchanged += 1
+        return
+
     _repair_config_toml(config_path, verbose=verbose)
 
     if config_path.exists() and not force:
         existing = read_config(config_path)
         if "model" in existing:
-            if _ensure_mcp_servers(config_path, dry_run=dry_run, verbose=verbose):
+            if _ensure_mcp_servers(scope_dirs, dry_run=dry_run, verbose=verbose):
                 summary.updated += 1
             else:
                 summary.unchanged += 1
@@ -862,18 +1091,32 @@ def _print_summary(summary: RunSummary) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_target_from_env() -> SetupTarget:
+    """Resolve setup target from OMX_CLI env var (default: codex)."""
+    import os
+
+    raw = (os.environ.get("OMX_CLI") or "").strip().lower()
+    if raw == "claude":
+        return SetupTarget.CLAUDE
+    return SetupTarget.CODEX
+
+
 def run_setup(
     force: bool = False,
     dry_run: bool = False,
     scope: str = "user",
     verbose: bool = False,
     install_mode: str | None = None,
+    target: SetupTarget | None = None,
 ) -> None:
     """Run the OMX setup process.
 
     Installs prompts, skills, MCP server config, native agents,
-    hooks, and AGENTS.md.  Handles scope migration, config repair,
-    plugin install-mode detection, and state tracking.
+    hooks, and AGENTS.md (or CLAUDE.md).  Handles scope migration,
+    config repair, plugin install-mode detection, and state tracking.
+
+    The target CLI (codex or claude) is selected via the ``target`` argument
+    or, if unset, the ``OMX_CLI`` environment variable (default: codex).
 
     Args:
         force: Force reinstall even if assets are up-to-date.
@@ -881,8 +1124,10 @@ def run_setup(
         scope: Installation scope ("user" or "project").
         verbose: Print per-file activity detail.
         install_mode: Override install mode ("legacy" or "plugin").
+        target: Provider CLI target (codex or claude). Defaults to OMX_CLI env.
     """
     project_root = Path.cwd()
+    resolved_target = target or _resolve_target_from_env()
 
     # Resolve scope with migration
     try:
@@ -918,11 +1163,14 @@ def run_setup(
         )
 
     is_plugin = resolved_mode == SetupInstallMode.PLUGIN
-    scope_dirs = resolve_scope_directories(resolved_scope, project_root)
+    scope_dirs = resolve_scope_directories(
+        resolved_scope, project_root, resolved_target
+    )
 
     print("oh-my-codex setup\n=================\n")
     tag = " (from .omx/setup-scope.json)" if scope_source == "persisted" else ""
     print(f"Using setup scope: {resolved_scope.value}{tag}")
+    print(f"Using target CLI:  {resolved_target.value}")
     if resolved_mode:
         print(f"Using install mode: {resolved_mode.value}")
     print()
@@ -964,9 +1212,14 @@ def run_setup(
         if r != "unchanged":
             print(f"  {r.title()} .gitignore with OMX project ignore rules.\n")
 
-    # [2/8] Prompts
+    is_claude = scope_dirs.target == SetupTarget.CLAUDE
+
+    # [2/8] Prompts (codex only — claude reads role files from agents/ instead)
     print("[2/8] Installing agent prompts...")
-    if not is_plugin:
+    if is_claude:
+        summary.prompts.skipped += 1
+        print("  Skipped for claude target (role files install to agents/).\n")
+    elif not is_plugin:
         _install_prompts(
             assets / "prompts",
             scope_dirs.prompts_dir,
@@ -975,9 +1228,10 @@ def run_setup(
             dry_run=dry_run,
             verbose=verbose,
         )
+        print("  Prompt refresh complete.\n")
     else:
         summary.prompts.skipped += 1
-    print("  Prompt refresh complete.\n")
+        print("  Prompt refresh complete.\n")
 
     # [3/8] Skills
     print("[3/8] Installing skills...")
@@ -995,8 +1249,22 @@ def run_setup(
     print("  Skill refresh complete.\n")
 
     # [4/8] Native agents
-    print("[4/8] Installing native agent configs...")
-    if not is_plugin:
+    label = "subagents (markdown)" if is_claude else "native agent configs"
+    print(f"[4/8] Installing {label}...")
+    if is_plugin:
+        summary.native_agents.skipped += 1
+        print("  Skipped for plugin skill delivery mode.\n")
+    elif is_claude:
+        _install_claude_agents(
+            assets / "prompts",
+            scope_dirs.native_agents_dir,
+            summary.native_agents,
+            force=force,
+            dry_run=dry_run,
+            verbose=verbose,
+        )
+        print(f"  Subagent refresh complete ({scope_dirs.native_agents_dir}).\n")
+    else:
         _install_native_agents(
             scope_dirs.native_agents_dir,
             summary.native_agents,
@@ -1005,12 +1273,10 @@ def run_setup(
             verbose=verbose,
         )
         print(f"  Native agent refresh complete ({scope_dirs.native_agents_dir}).\n")
-    else:
-        summary.native_agents.skipped += 1
-        print("  Skipped for plugin skill delivery mode.\n")
 
-    # [5/8] Config
-    print("[5/8] Updating config.toml...")
+    # [5/8] Config / settings
+    settings_label = "settings.json" if is_claude else "config.toml"
+    print(f"[5/8] Updating {settings_label}...")
     _ensure_config(
         scope_dirs, summary.config, force=force, dry_run=dry_run, verbose=verbose
     )
@@ -1018,39 +1284,60 @@ def run_setup(
 
     # [6/8] Hooks
     print("[6/8] Configuring hooks...")
-    _ensure_hooks(
-        scope_dirs.codex_hooks_file, summary.config, dry_run=dry_run, verbose=verbose
-    )
-    print(f"  Hooks refresh complete ({scope_dirs.codex_hooks_file}).\n")
+    if is_claude:
+        _ensure_claude_hooks(
+            scope_dirs.codex_config_file,  # settings.json
+            summary.config,
+            dry_run=dry_run,
+            verbose=verbose,
+        )
+        print(
+            f"  Hooks refresh complete in {scope_dirs.codex_config_file} "
+            f"({len(CLAUDE_HOOK_EVENTS)} events wired).\n"
+        )
+    else:
+        _ensure_hooks(
+            scope_dirs.codex_hooks_file,
+            summary.config,
+            dry_run=dry_run,
+            verbose=verbose,
+        )
+        print(f"  Hooks refresh complete ({scope_dirs.codex_hooks_file}).\n")
 
-    # [7/8] AGENTS.md
-    print("[7/8] Generating AGENTS.md...")
+    # [7/8] Top-level instructions file (AGENTS.md for codex, CLAUDE.md for claude)
+    md_filename = scope_dirs.main_instructions_filename
+    print(f"[7/8] Generating {md_filename}...")
     tpl = assets / "templates" / "AGENTS.md"
     md_dst = (
-        project_root / "AGENTS.md"
+        project_root / md_filename
         if resolved_scope == SetupScope.PROJECT
-        else scope_dirs.codex_home_dir / "AGENTS.md"
+        else scope_dirs.codex_home_dir / md_filename
     )
     if tpl.exists():
         content = tpl.read_text(encoding="utf-8")
         if resolved_scope == SetupScope.PROJECT:
-            content = content.replace("~/.codex", "./.codex")
+            replacement = "./.claude" if is_claude else "./.codex"
+            content = content.replace("~/.codex", replacement)
+        elif is_claude:
+            content = content.replace("~/.codex", "~/.claude")
         if md_dst.exists() and not force:
             if md_dst.read_text(encoding="utf-8") == content:
                 summary.agents_md.unchanged += 1
-                print("  AGENTS.md already up to date.\n")
+                print(f"  {md_filename} already up to date.\n")
             else:
                 summary.agents_md.skipped += 1
-                print(f"  AGENTS.md exists at {md_dst}. Use --force to overwrite.\n")
+                print(
+                    f"  {md_filename} exists at {md_dst}. Use --force to overwrite.\n"
+                )
         else:
             if not dry_run:
                 md_dst.parent.mkdir(parents=True, exist_ok=True)
                 md_dst.write_text(content, encoding="utf-8")
             summary.agents_md.updated += 1
-            print(f"  Generated AGENTS.md at {md_dst}.\n")
+            print(f"  Generated {md_filename} at {md_dst}.\n")
     else:
         summary.agents_md.skipped += 1
-        print("  AGENTS.md template not found, skipping.\n")
+        print(f"  {md_filename} template not found, skipping.\n")
 
     # [8/8] HUD
     print("[8/8] Configuring HUD...")

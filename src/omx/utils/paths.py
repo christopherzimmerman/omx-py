@@ -49,6 +49,26 @@ def legacy_user_skills_dir() -> Path:
     return Path.home() / ".agents" / "skills"
 
 
+def claude_home() -> Path:
+    """Claude CLI home directory (~/.claude/)."""
+    return Path(os.environ.get("CLAUDE_HOME", Path.home() / ".claude"))
+
+
+def claude_settings_path() -> Path:
+    """Claude settings file path (~/.claude/settings.json)."""
+    return claude_home() / "settings.json"
+
+
+def claude_skills_dir() -> Path:
+    """Claude user-level skills directory (~/.claude/skills/)."""
+    return claude_home() / "skills"
+
+
+def claude_agents_dir() -> Path:
+    """Claude user-level subagents directory (~/.claude/agents/)."""
+    return claude_home() / "agents"
+
+
 def omx_state_dir(project_root: Path | None = None) -> Path:
     """oh-my-codex state directory (.omx/state/)."""
     return (project_root or Path.cwd()) / ".omx" / "state"
@@ -72,11 +92,6 @@ def omx_wiki_dir(project_root: Path | None = None) -> Path:
 def omx_plans_dir(project_root: Path | None = None) -> Path:
     """oh-my-codex plans directory (.omx/plans/)."""
     return (project_root or Path.cwd()) / ".omx" / "plans"
-
-
-def omx_adapters_dir(project_root: Path | None = None) -> Path:
-    """oh-my-codex adapters directory (.omx/adapters/)."""
-    return (project_root or Path.cwd()) / ".omx" / "adapters"
 
 
 def omx_logs_dir(project_root: Path | None = None) -> Path:
