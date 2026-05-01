@@ -10,9 +10,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from omx.core.authority import AuthorityLease
-from omx.core.dispatch import DispatchLog, DispatchStatus
-from omx.core.mailbox import MailboxLog
+from omx.core.authority import AuthorityError, AuthorityLease
+from omx.core.dispatch import DispatchError, DispatchLog, DispatchStatus
+from omx.core.mailbox import MailboxError, MailboxLog
 from omx.core.replay import ReplayState
 from omx.core.types import (
     RUNTIME_SCHEMA_VERSION,
@@ -252,36 +252,41 @@ class RuntimeEngine:
 
 
 def _replay_event(engine: RuntimeEngine, event: RuntimeEvent) -> None:
-    """Replay a single event to rebuild engine state."""
+    """Replay a single event to rebuild engine state.
+
+    Idempotent: tolerates re-applying already-known transitions
+    (e.g. notifying an already-notified dispatch) by swallowing
+    the domain-specific error from the underlying log.
+    """
     match event.event:
         case "AuthorityAcquired":
             try:
                 engine.authority.acquire(
                     event.owner, event.lease_id, event.leased_until
                 )  # type: ignore[arg-type]
-            except Exception:
+            except AuthorityError:
                 pass
         case "AuthorityRenewed":
             try:
                 engine.authority.renew(event.owner, event.lease_id, event.leased_until)  # type: ignore[arg-type]
-            except Exception:
+            except AuthorityError:
                 pass
         case "DispatchQueued":
             engine.dispatch.queue(event.request_id, event.target, event.metadata)  # type: ignore[arg-type]
         case "DispatchNotified":
             try:
                 engine.dispatch.mark_notified(event.request_id, event.channel)  # type: ignore[arg-type]
-            except Exception:
+            except DispatchError:
                 pass
         case "DispatchDelivered":
             try:
                 engine.dispatch.mark_delivered(event.request_id)  # type: ignore[arg-type]
-            except Exception:
+            except DispatchError:
                 pass
         case "DispatchFailed":
             try:
                 engine.dispatch.mark_failed(event.request_id, event.reason)  # type: ignore[arg-type]
-            except Exception:
+            except DispatchError:
                 pass
         case "ReplayRequested":
             engine.replay.request_replay(event.cursor)
@@ -297,12 +302,12 @@ def _replay_event(engine: RuntimeEngine, event: RuntimeEvent) -> None:
         case "MailboxNotified":
             try:
                 engine.mailbox.mark_notified(event.message_id)  # type: ignore[arg-type]
-            except Exception:
+            except MailboxError:
                 pass
         case "MailboxDelivered":
             try:
                 engine.mailbox.mark_delivered(event.message_id)  # type: ignore[arg-type]
-            except Exception:
+            except MailboxError:
                 pass
 
 

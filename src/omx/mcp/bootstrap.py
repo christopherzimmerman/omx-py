@@ -88,7 +88,7 @@ def auto_start_stdio_server(server_name: str, server: McpServer) -> None:
         t = threading.Thread(target=watchdog, daemon=True)
         t.start()
 
-    def handle_signal(signum: int, frame: Any) -> None:
+    def handle_signal(_signum: int, _frame: Any) -> None:
         sys.exit(0)
 
     if sys.platform != "win32":

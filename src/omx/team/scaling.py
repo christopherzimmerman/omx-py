@@ -24,7 +24,6 @@ class ScalingDecision:
 def evaluate_scaling(
     current_workers: int,
     pending_tasks: int,
-    in_progress_tasks: int,
     idle_workers: int,
     dead_workers: int,
     max_workers: int = DEFAULT_MAX_WORKERS,
@@ -34,7 +33,6 @@ def evaluate_scaling(
     Args:
         current_workers: Current number of active workers.
         pending_tasks: Number of pending tasks.
-        in_progress_tasks: Number of in-progress tasks.
         idle_workers: Number of idle workers.
         dead_workers: Number of dead workers.
         max_workers: Maximum allowed workers.

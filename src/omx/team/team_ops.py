@@ -14,7 +14,6 @@ def create_team_task(
     description: str,
     role: str | None = None,
     file_paths: list[str] | None = None,
-    depends_on: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create a new task in the team.
 
@@ -24,7 +23,6 @@ def create_team_task(
         description: Task description.
         role: Optional agent role.
         file_paths: Optional file scope.
-        depends_on: Optional task dependencies.
 
     Returns:
         Created task dict.

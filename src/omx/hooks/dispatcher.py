@@ -155,8 +155,6 @@ class HookRuntimeDispatchResult:
 def dispatch_hook_event_runtime(
     cwd: str,
     event: HookEventEnvelope,
-    *,
-    allow_team_worker_side_effects: bool = False,
 ) -> HookRuntimeDispatchResult:
     """Runtime dispatch wrapper with source-based enable logic.
 
@@ -166,7 +164,6 @@ def dispatch_hook_event_runtime(
     Args:
         cwd: Working directory.
         event: The hook event envelope to dispatch.
-        allow_team_worker_side_effects: Whether team worker side effects are allowed.
 
     Returns:
         HookRuntimeDispatchResult with dispatch outcome.

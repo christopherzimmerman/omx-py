@@ -10,7 +10,6 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 
 @dataclass
@@ -34,17 +33,13 @@ class RunHudAuthorityTickOptions:
     env: dict[str, str] | None = None
 
 
-def run_hud_authority_tick(
-    options: RunHudAuthorityTickOptions,
-    run_process: Callable[..., None] | None = None,
-) -> None:
+def run_hud_authority_tick(options: RunHudAuthorityTickOptions) -> None:
     """Run a single HUD authority tick.
 
     Writes authority owner state and optionally runs a watcher process.
 
     Args:
         options: Tick options.
-        run_process: Optional process runner override.
     """
     cwd = options.cwd
     state_dir = Path(cwd) / ".omx" / "state"
