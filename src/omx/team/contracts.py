@@ -86,6 +86,10 @@ class TeamTask:
         started_at: ISO timestamp when work began.
         completed_at: ISO timestamp when completed/failed.
         error: Error message if failed.
+        depends_on: Task IDs that must reach ``completed`` before this task
+            is ready to be claimed. Takes precedence over ``blocked_by``.
+        blocked_by: Legacy alias for ``depends_on`` (TS parity). Used only
+            when ``depends_on`` is None.
     """
 
     task_id: str
@@ -100,6 +104,8 @@ class TeamTask:
     started_at: str | None = None
     completed_at: str | None = None
     error: str | None = None
+    depends_on: list[str] | None = None
+    blocked_by: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -117,6 +123,10 @@ class TeamTask:
             d["file_paths"] = self.file_paths
         if self.domains:
             d["domains"] = self.domains
+        if self.depends_on is not None:
+            d["depends_on"] = self.depends_on
+        if self.blocked_by is not None:
+            d["blocked_by"] = self.blocked_by
         return d
 
     @classmethod
@@ -134,6 +144,8 @@ class TeamTask:
             started_at=d.get("started_at"),
             completed_at=d.get("completed_at"),
             error=d.get("error"),
+            depends_on=d.get("depends_on"),
+            blocked_by=d.get("blocked_by"),
         )
 
 

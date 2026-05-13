@@ -6,7 +6,9 @@ Port of src/team/state/tasks.ts.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+from enum import StrEnum
 from typing import Any
 
 from omx.team.state.types import (
@@ -17,6 +19,101 @@ from omx.team.state.types import (
 )
 
 CLAIM_LEASE_MINUTES = 15
+
+
+class TaskReadinessReason(StrEnum):
+    """Reason a task is not ready to be claimed."""
+
+    BLOCKED_DEPENDENCY = "blocked_dependency"
+
+
+@dataclass
+class TaskReadiness:
+    """Result of computing whether a task can be claimed.
+
+    Mirrors the TS discriminated union:
+        | { ready: true }
+        | { ready: false; reason: 'blocked_dependency'; dependencies: string[] }
+
+    When ``ready`` is True, ``reason`` and ``dependencies`` are unset/empty.
+    When ``ready`` is False, ``reason`` is set and ``dependencies`` lists the
+    task IDs that are blocking readiness (incomplete deps or missing deps).
+    """
+
+    ready: bool
+    reason: TaskReadinessReason | None = None
+    dependencies: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.ready:
+            return {"ready": True}
+        return {
+            "ready": False,
+            "reason": self.reason.value if self.reason else None,
+            "dependencies": list(self.dependencies),
+        }
+
+
+def compute_task_readiness(cwd: str, team_name: str, task_id: str) -> TaskReadiness:
+    """Compute whether a task is ready to be claimed.
+
+    A task is ready iff every task ID in ``depends_on`` (falling back to
+    ``blocked_by``) resolves to a task with status ``completed``. Missing
+    dependency IDs and dependencies in any non-completed status (including
+    ``failed``) are reported as blockers, matching the TS implementation.
+
+    Port of src/team/state/tasks.ts::computeTaskReadiness. The TS version
+    is parameterized over a ``readTask`` dependency; here we read the tasks
+    file once and resolve dependencies in-memory.
+
+    Args:
+        cwd: Working directory containing the .omx team state.
+        team_name: Team name (used as the team-state directory key).
+        task_id: ID of the task whose readiness is being computed.
+
+    Returns:
+        TaskReadiness describing the result.
+    """
+    # Local import to avoid a circular import: state.io imports contracts
+    # which is fine, but keep this lazy in case io grows other dependencies.
+    from omx.team.contracts import TaskStatus
+    from omx.team.state.io import read_tasks
+
+    tasks = read_tasks(cwd, team_name)
+    by_id: dict[str, Any] = {t.task_id: t for t in tasks}
+
+    task = by_id.get(task_id)
+    if task is None:
+        return TaskReadiness(
+            ready=False,
+            reason=TaskReadinessReason.BLOCKED_DEPENDENCY,
+            dependencies=[],
+        )
+
+    dep_ids: list[str] = []
+    if task.depends_on is not None:
+        dep_ids = list(task.depends_on)
+    elif task.blocked_by is not None:
+        dep_ids = list(task.blocked_by)
+
+    if not dep_ids:
+        return TaskReadiness(ready=True)
+
+    incomplete: list[str] = []
+    for dep_id in dep_ids:
+        dep = by_id.get(dep_id)
+        # Missing dep or dep not in 'completed' state is incomplete (TS parity).
+        if dep is None or dep.status != TaskStatus.COMPLETED:
+            incomplete.append(dep_id)
+
+    if incomplete:
+        return TaskReadiness(
+            ready=False,
+            reason=TaskReadinessReason.BLOCKED_DEPENDENCY,
+            dependencies=incomplete,
+        )
+
+    return TaskReadiness(ready=True)
 
 
 def _now_iso() -> str:

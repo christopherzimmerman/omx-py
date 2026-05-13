@@ -146,7 +146,7 @@ omx-py/
 │       ├── explore/            # Read-only exploration (port of Rust omx-explore)
 │       │   ├── allowlist.py    # Permitted commands
 │       │   └── harness.py      # Explore mode executor
-│       ├── notifications/      # Local desktop notifications
+│       ├── notifications/      # Local desktop notifications (basic surface; advanced features intentionally out of scope — see docs/PORT_PLAN.md)
 │       │   └── notifier.py     # OS-native desktop notification dispatch
 │       ├── hud/                # Tmux statusline
 │       │   ├── state.py        # HUD state persistence
@@ -170,7 +170,7 @@ omx-py/
 │           └── toml_read.py    # tomllib wrapper
 ├── assets/                     # Static content (skills, prompts, templates)
 └── tests/
-    └── unit/                   # 520 tests, all stdlib unittest
+    └── unit/                   # 532 tests (531 passed, 1 skipped), all stdlib unittest
 ```
 
 ## Architecture
@@ -179,7 +179,7 @@ omx-py/
 
 | Original | Language | Python module | Lines |
 |----------|----------|---------------|-------|
-| `src/` (267 TS files) | TypeScript | `src/omx/` | ~6,000 |
+| `src/` (267 TS files) | TypeScript | `src/omx/` | ~27,800 |
 | `crates/omx-runtime-core/` | Rust | `omx.core` | — |
 | `crates/omx-mux/` | Rust | `omx.mux` | — |
 | `crates/omx-sparkshell/` | Rust | `omx.sparkshell` | — |
