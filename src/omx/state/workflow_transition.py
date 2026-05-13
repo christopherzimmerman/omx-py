@@ -5,7 +5,10 @@ Port of src/state/workflow-transition.ts.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 TRACKED_WORKFLOW_MODES: list[str] = [
     "autopilot",
@@ -218,3 +221,87 @@ def _format_active_modes(modes: list[str]) -> str:
     if len(modes) == 2:
         return f"{modes[0]} and {modes[1]} are already active"
     return f"{', '.join(modes[:-1])}, and {modes[-1]} are already active"
+
+
+def build_workflow_transition_message(source_mode: str, requested_mode: str) -> str:
+    """Build the canonical transition log message."""
+    return f"mode transiting: {source_mode} -> {requested_mode}"
+
+
+def assert_workflow_transition_allowed(
+    current_active_modes: list[str],
+    requested_mode: str,
+    action: str = "activate",
+) -> None:
+    """Raise ``RuntimeError`` if the requested workflow transition is denied.
+
+    Args:
+        current_active_modes: Currently active tracked modes.
+        requested_mode: The mode being requested.
+        action: Verb for error messages (``"activate"``, ``"start"``, ``"write"``).
+
+    Raises:
+        RuntimeError: If the transition is not allowed.
+    """
+    decision = evaluate_workflow_transition(current_active_modes, requested_mode)
+    if decision.allowed:
+        return
+    raise RuntimeError(
+        build_workflow_transition_error(current_active_modes, requested_mode, action)
+    )
+
+
+def read_active_workflow_modes(
+    cwd: str,
+    session_id: str | None = None,
+) -> list[str]:
+    """Read tracked workflow modes that are currently active on disk.
+
+    Walks every tracked workflow mode's read-scoped paths and returns the
+    modes whose state file has ``active === True``.
+
+    Args:
+        cwd: Working directory.
+        session_id: Optional session scope.
+
+    Returns:
+        Ordered list of active tracked workflow mode names.
+
+    Raises:
+        RuntimeError: If a state file exists but cannot be parsed.
+    """
+    # Local import to avoid a circular dependency: state.paths is pure, but
+    # callers may use this from inside modes/base.py.
+    from omx.state.paths import get_read_scoped_state_paths
+
+    active: list[str] = []
+    for mode in TRACKED_WORKFLOW_MODES:
+        candidate_paths = get_read_scoped_state_paths(mode, cwd, session_id)
+        for candidate in candidate_paths:
+            path = Path(candidate)
+            if not path.exists():
+                continue
+            try:
+                parsed: Any = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"Cannot read {mode} workflow state at {path}. "
+                    f"Repair or clear that workflow state yourself via "
+                    f"`omx state clear --mode {mode}` or the `omx_state.*` MCP tools."
+                ) from exc
+            if isinstance(parsed, dict) and parsed.get("active") is True:
+                active.append(mode)
+            break
+    return active
+
+
+def pick_primary_workflow_mode(
+    current_primary: Any,
+    resulting_modes: list[str],
+    fallback_mode: str,
+) -> str:
+    """Pick a stable primary workflow mode given current + resulting set."""
+    normalized = current_primary.strip() if isinstance(current_primary, str) else ""
+    if normalized and normalized in resulting_modes:
+        return normalized
+    return resulting_modes[0] if resulting_modes else fallback_mode

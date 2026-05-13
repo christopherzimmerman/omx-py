@@ -17,7 +17,6 @@ varied arg orders for historical reasons; wrappers here normalize them.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from omx.team.state_root import team_dir as _team_dir
@@ -98,10 +97,90 @@ from omx.team.state.io import (
 )
 
 
+__all__ = [
+    # Types
+    "ABSOLUTE_MAX_WORKERS",
+    "DEFAULT_MAX_WORKERS",
+    "PermissionsSnapshot",
+    "ShutdownAck",
+    "TaskApprovalRecord",
+    "TaskReadiness",
+    "TaskStatus",
+    "TeamDispatchRequest",
+    "TeamEvent",
+    "TeamGovernance",
+    "TeamLeader",
+    "TeamLeaderAttentionState",
+    "TeamMailboxMessage",
+    "TeamManifestV2",
+    "TeamMonitorSnapshot",
+    "TeamPhaseState",
+    "TeamPolicy",
+    "TeamTask",
+    "TeamTaskClaim",
+    "TeamWorker",
+    # Direct re-exports
+    "resolve_dispatch_lock_timeout_ms",
+    "team_append_event",
+    "team_cleanup",
+    "team_compute_task_readiness",
+    "team_create_task",
+    "team_init",
+    "team_list_tasks",
+    "team_mark_leader_session_stopped",
+    "team_mark_owned_teams_leader_session_stopped",
+    "team_normalize_governance",
+    "team_normalize_policy",
+    "team_read_config",
+    "team_read_leader_attention",
+    "team_read_manifest",
+    "team_read_shutdown_ack",
+    "team_read_task",
+    "team_read_worker_heartbeat",
+    "team_read_worker_status",
+    "team_save_config",
+    "team_update_task",
+    "team_update_worker_heartbeat",
+    "team_write_leader_attention",
+    "team_write_manifest",
+    "team_write_shutdown_request",
+    "team_write_worker_identity",
+    "team_write_worker_inbox",
+    "team_write_worker_status",
+    "write_atomic",
+    # Wrappers (defined below)
+    "team_broadcast",
+    "team_claim_task",
+    "team_enqueue_dispatch_request",
+    "team_get_summary",
+    "team_list_dispatch_requests",
+    "team_list_mailbox",
+    "team_mark_dispatch_request_delivered",
+    "team_mark_dispatch_request_notified",
+    "team_mark_message_delivered",
+    "team_mark_message_notified",
+    "team_read_dispatch_request",
+    "team_read_monitor_snapshot",
+    "team_read_phase",
+    "team_read_task_approval",
+    "team_reclaim_expired_task_claim",
+    "team_release_task_claim",
+    "team_send_message",
+    "team_transition_dispatch_request",
+    "team_transition_task_status",
+    "team_with_scaling_lock",
+    "team_write_monitor_snapshot",
+    "team_write_phase",
+    "team_write_task_approval",
+]
+
+
 # === team_dir-based wrappers (state layer takes Path; gateway takes team_name+cwd) ===
 
 
-def team_claim_task(team_name: str, task_id: str, worker_name: str, cwd: str) -> dict[str, Any]:
+def team_claim_task(
+    team_name: str, task_id: str, worker_name: str, cwd: str
+) -> dict[str, Any]:
     """Claim a task for a worker via the bulk-task store."""
     from omx.team.state.io import read_tasks, write_tasks
     from omx.team.state.tasks import claim_task
@@ -196,7 +275,11 @@ def team_send_message(
 
 
 def team_broadcast(
-    team_name: str, from_worker: str, body: str, cwd: str, worker_names: list[str] | None = None
+    team_name: str,
+    from_worker: str,
+    body: str,
+    cwd: str,
+    worker_names: list[str] | None = None,
 ) -> list[TeamMailboxMessage]:
     """Broadcast a message to all workers in the team (excluding ``from_worker``).
 
@@ -324,15 +407,21 @@ def team_write_task_approval(
 
 
 def team_get_summary(team_name: str, cwd: str) -> dict[str, Any]:
-    """Build a team summary dict."""
+    """Build a team summary dict.
+
+    Resolves workers + tasks from the state layer and dispatches to
+    `team.state.monitor.get_team_summary`, which expects pre-loaded lists
+    rather than (team_name, cwd).
+    """
+    from omx.team.state.io import read_tasks, read_workers
     from omx.team.state.monitor import get_team_summary
 
-    return get_team_summary(cwd, team_name)
+    workers = [w.to_dict() for w in read_workers(cwd, team_name)]
+    tasks = [t.to_dict() for t in read_tasks(cwd, team_name)]
+    return get_team_summary(_team_dir(team_name, cwd), workers, tasks)
 
 
-def team_read_monitor_snapshot(
-    team_name: str, cwd: str
-) -> TeamMonitorSnapshot | None:
+def team_read_monitor_snapshot(team_name: str, cwd: str) -> TeamMonitorSnapshot | None:
     """Read the persisted monitor snapshot for a team."""
     from omx.team.state.monitor import read_monitor_snapshot
 

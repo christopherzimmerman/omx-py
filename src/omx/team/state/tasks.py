@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from omx.team.state.types import (
     TeamTaskClaim,
@@ -17,6 +17,9 @@ from omx.team.state.types import (
     can_transition_task_status,
     is_terminal_task_status,
 )
+
+if TYPE_CHECKING:
+    from omx.team.contracts import TeamTask
 
 CLAIM_LEASE_MINUTES = 15
 

@@ -7,7 +7,6 @@ translates team_name+cwd to team_dir.
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -123,7 +122,9 @@ class TestNewPrimitives(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.cwd = self.tmp.name
-        team_ops.team_save_config(self.cwd, {"name": "alpha", "next_task_id": 1}, "alpha")
+        team_ops.team_save_config(
+            self.cwd, {"name": "alpha", "next_task_id": 1}, "alpha"
+        )
 
     def test_cleanup_team_state_removes_directory(self) -> None:
         team_dir = Path(self.cwd) / ".omx" / "team" / "alpha"
@@ -158,7 +159,9 @@ class TestNewPrimitives(unittest.TestCase):
 
     def test_resolve_dispatch_lock_timeout_clamps(self) -> None:
         self.assertEqual(
-            team_ops.resolve_dispatch_lock_timeout_ms({"OMX_TEAM_DISPATCH_LOCK_TIMEOUT_MS": "100"}),
+            team_ops.resolve_dispatch_lock_timeout_ms(
+                {"OMX_TEAM_DISPATCH_LOCK_TIMEOUT_MS": "100"}
+            ),
             1_000,
         )
         self.assertEqual(
@@ -190,7 +193,9 @@ class TestTaskCrud(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.cwd = self.tmp.name
-        team_ops.team_save_config(self.cwd, {"name": "alpha", "next_task_id": 1}, "alpha")
+        team_ops.team_save_config(
+            self.cwd, {"name": "alpha", "next_task_id": 1}, "alpha"
+        )
 
     def test_create_task_returns_team_task_with_assigned_id(self) -> None:
         t = team_ops.team_create_task(self.cwd, "alpha", "first task")
@@ -225,7 +230,10 @@ class TestTaskCrud(unittest.TestCase):
     def test_update_task_merges_fields(self) -> None:
         created = team_ops.team_create_task(self.cwd, "alpha", "original")
         updated = team_ops.team_update_task(
-            self.cwd, "alpha", created.task_id, {"description": "edited", "role": "executor"}
+            self.cwd,
+            "alpha",
+            created.task_id,
+            {"description": "edited", "role": "executor"},
         )
         self.assertIsNotNone(updated)
         assert updated is not None
@@ -236,16 +244,21 @@ class TestTaskCrud(unittest.TestCase):
         self.assertEqual(updated.created_at, created.created_at)
 
     def test_update_task_returns_none_for_missing(self) -> None:
-        self.assertIsNone(team_ops.team_update_task(self.cwd, "alpha", "999", {"description": "x"}))
+        self.assertIsNone(
+            team_ops.team_update_task(self.cwd, "alpha", "999", {"description": "x"})
+        )
 
     def test_update_task_rejects_invalid_status(self) -> None:
         created = team_ops.team_create_task(self.cwd, "alpha", "x")
         with self.assertRaises(ValueError):
-            team_ops.team_update_task(self.cwd, "alpha", created.task_id, {"status": "nonsense"})
+            team_ops.team_update_task(
+                self.cwd, "alpha", created.task_id, {"status": "nonsense"}
+            )
 
     def test_update_task_falls_back_to_blocked_by_when_depends_on_missing(self) -> None:
         # Create with legacy blocked_by, no depends_on
         from omx.team.state.io import read_tasks, write_tasks
+
         tasks = read_tasks(self.cwd, "alpha")
         tasks.append(
             TeamTask(
@@ -257,7 +270,9 @@ class TestTaskCrud(unittest.TestCase):
         )
         write_tasks(self.cwd, tasks, "alpha")
 
-        updated = team_ops.team_update_task(self.cwd, "alpha", "42", {"description": "edited"})
+        updated = team_ops.team_update_task(
+            self.cwd, "alpha", "42", {"description": "edited"}
+        )
         assert updated is not None
         # depends_on hydrated from blocked_by since neither was in updates
         self.assertEqual(updated.depends_on, ["10", "11"])
@@ -273,6 +288,7 @@ class TestBroadcastMessage(unittest.TestCase):
         team_ops.team_save_config(self.cwd, {"name": "alpha"}, "alpha")
         # Seed workers
         from omx.team.state.io import write_workers
+
         write_workers(
             self.cwd,
             [
@@ -328,7 +344,9 @@ class TestDispatchHelpers(unittest.TestCase):
 
     def test_mark_notified_transitions(self) -> None:
         self.assertTrue(
-            team_ops.team_mark_dispatch_request_notified("alpha", self.request_id, self.cwd)
+            team_ops.team_mark_dispatch_request_notified(
+                "alpha", self.request_id, self.cwd
+            )
         )
         rec = team_ops.team_read_dispatch_request("alpha", self.request_id, self.cwd)
         assert rec is not None
@@ -337,7 +355,9 @@ class TestDispatchHelpers(unittest.TestCase):
     def test_mark_delivered_transitions(self) -> None:
         team_ops.team_mark_dispatch_request_notified("alpha", self.request_id, self.cwd)
         self.assertTrue(
-            team_ops.team_mark_dispatch_request_delivered("alpha", self.request_id, self.cwd)
+            team_ops.team_mark_dispatch_request_delivered(
+                "alpha", self.request_id, self.cwd
+            )
         )
         rec = team_ops.team_read_dispatch_request("alpha", self.request_id, self.cwd)
         assert rec is not None
@@ -346,7 +366,9 @@ class TestDispatchHelpers(unittest.TestCase):
     def test_mark_delivered_returns_false_on_invalid_transition(self) -> None:
         # delivered → notified is not a valid transition; nor is unknown id
         self.assertFalse(
-            team_ops.team_mark_dispatch_request_notified("alpha", "no-such-id", self.cwd)
+            team_ops.team_mark_dispatch_request_notified(
+                "alpha", "no-such-id", self.cwd
+            )
         )
 
 
@@ -376,6 +398,7 @@ class TestGatewayWrapperRoundTrip(unittest.TestCase):
 
         # Mark a completed via direct write — simulates worker completion
         from omx.team.state.io import read_tasks, write_tasks
+
         tasks = read_tasks(self.cwd, "alpha")
         for t in tasks:
             if t.task_id == a.task_id:

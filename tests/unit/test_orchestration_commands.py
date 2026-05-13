@@ -93,8 +93,8 @@ class TestRalphWritesStateAndInstructions(unittest.TestCase):
                 content = instructions_path.read_text(encoding="utf-8")
                 self.assertIn("Ralph persistence mode", content)
                 self.assertIn("fix the bug", content)
-                self.assertIn("Investigate", content)
-                self.assertIn("Verify", content)
+                self.assertIn("Starting", content)
+                self.assertIn("Verifying", content)
 
                 # Codex should have been launched
                 mock_run.assert_called_once()
@@ -140,7 +140,7 @@ class TestAutoresearchShowsDeprecation(unittest.TestCase):
     """Verify autoresearch prints deprecation message."""
 
     def test_autoresearch_shows_deprecation(self):
-        """The autoresearch command should print a deprecation notice and exit 0."""
+        """The autoresearch command should print a deprecation notice (TS parity: exit 1)."""
         result = subprocess.run(
             [
                 sys.executable,
@@ -152,9 +152,12 @@ class TestAutoresearchShowsDeprecation(unittest.TestCase):
             env={**os.environ, "PYTHONPATH": "src"},
             cwd=str(Path(__file__).resolve().parent.parent.parent),
         )
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("deprecated", result.stdout)
-        self.assertIn("$autoresearch", result.stdout)
+        # TS ``autoresearchCommand`` throws on bare invocation, surfacing as
+        # exit 1. The message is emitted on stderr alongside the help block.
+        self.assertEqual(result.returncode, 1)
+        combined = result.stdout + result.stderr
+        self.assertIn("deprecated", combined.lower())
+        self.assertIn("$autoresearch", combined)
 
 
 class TestResumeNoSessionPrintsError(unittest.TestCase):

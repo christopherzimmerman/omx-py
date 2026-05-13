@@ -170,7 +170,7 @@ omx-py/
 │           └── toml_read.py    # tomllib wrapper
 ├── assets/                     # Static content (skills, prompts, templates)
 └── tests/
-    └── unit/                   # 532 tests (531 passed, 1 skipped), all stdlib unittest
+    └── unit/                   # 2,313 tests (2,312 passed, 1 skipped), all stdlib unittest
 ```
 
 ## Architecture
@@ -179,7 +179,7 @@ omx-py/
 
 | Original | Language | Python module | Lines |
 |----------|----------|---------------|-------|
-| `src/` (267 TS files) | TypeScript | `src/omx/` | ~27,800 |
+| `src/` (267 TS files) | TypeScript | `src/omx/` | ~54,200 |
 | `crates/omx-runtime-core/` | Rust | `omx.core` | — |
 | `crates/omx-mux/` | Rust | `omx.mux` | — |
 | `crates/omx-sparkshell/` | Rust | `omx.sparkshell` | — |

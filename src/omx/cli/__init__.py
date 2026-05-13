@@ -41,6 +41,14 @@ KNOWN_SUBCOMMANDS = {
     "trace",
     "code-intel",
     "version",
+    # Phase 9 — newly wired top-level subcommands
+    "star-prompt",
+    "mcp-parity",
+    "tmux-hook",
+    "catalog-contract",
+    "native-assets",
+    "question",
+    "codex-home",
 }
 
 # Flags that get normalized and passed through to codex on bare launch
@@ -73,6 +81,37 @@ def main(argv: list[str] | None = None) -> None:
         # Unknown first arg — treat as bare launch with passthrough
         _handle_launch_raw(raw_args)
         return
+
+    # Phase 9 commands accept arbitrary flag/positional patterns that argparse
+    # struggles to model alongside the global parser (REMAINDER only captures
+    # tokens after a leading positional). Dispatch them directly here so the
+    # full arg vector is available to the handler.
+    _RAW_DISPATCH = {
+        "star-prompt": "omx.cli.star_prompt:handle_star_prompt",
+        "mcp-parity": "omx.cli.mcp_parity:handle_mcp_parity",
+        "tmux-hook": "omx.cli.tmux_hook:handle_tmux_hook",
+        "catalog-contract": "omx.cli.catalog_contract:handle_catalog_contract",
+        "native-assets": "omx.cli.native_assets:handle_native_assets",
+        "question": "omx.cli.question:handle_question",
+        "codex-home": "omx.cli.codex_home:handle_codex_home",
+    }
+    if raw_args[0] in _RAW_DISPATCH:
+        import importlib
+
+        module_name, _, attr = _RAW_DISPATCH[raw_args[0]].partition(":")
+        module = importlib.import_module(module_name)
+        getattr(module, attr)(raw_args[1:])
+        return
+
+    # The team command has its own REMAINDER-style sub-subcommands; intercept
+    # them here when the second token is a known sub-subcommand so unknown
+    # flags (--json, --force, ...) don't trip the parent parser.
+    if raw_args[0] == "team" and len(raw_args) > 1:
+        from omx.cli.team_subcommands import TEAM_SUBCOMMANDS, dispatch_team_subcommand
+
+        if raw_args[1] in TEAM_SUBCOMMANDS:
+            dispatch_team_subcommand(raw_args[1], raw_args[2:])
+            return
 
     parser = argparse.ArgumentParser(
         prog="omx",
@@ -123,6 +162,11 @@ def main(argv: list[str] | None = None) -> None:
     sp_team = subparsers.add_parser("team", help="Spawn parallel worker panes in tmux")
     sp_team.add_argument("spec", nargs="?", help="Worker spec (e.g. 3:executor)")
     sp_team.add_argument("--prompt", help="Task prompt for workers")
+    sp_team.add_argument(
+        "rest",
+        nargs=argparse.REMAINDER,
+        help="Sub-subcommand arguments (for status/shutdown/resume/scale-up/...)",
+    )
 
     # --- ralph ---
     sp_ralph = subparsers.add_parser("ralph", help="Launch with ralph persistence mode")
@@ -270,6 +314,57 @@ def main(argv: list[str] | None = None) -> None:
 
     # --- help ---
     subparsers.add_parser("help", help="Show help")
+
+    # --- Phase 9 new top-level subcommands ---
+
+    sp_star = subparsers.add_parser("star-prompt", help="One-time GitHub star prompt")
+    sp_star.add_argument("rest", nargs=argparse.REMAINDER, help="--status / --force")
+
+    sp_mcp_parity = subparsers.add_parser(
+        "mcp-parity", help="CLI surface mirroring MCP tool calls"
+    )
+    sp_mcp_parity.add_argument(
+        "rest",
+        nargs=argparse.REMAINDER,
+        help="<server> <tool-name> [--input <json>] [--json]",
+    )
+
+    sp_tmux_hook = subparsers.add_parser(
+        "tmux-hook", help="Manage tmux prompt-injection workaround"
+    )
+    sp_tmux_hook.add_argument(
+        "rest", nargs=argparse.REMAINDER, help="init|status|validate|test"
+    )
+
+    sp_catalog = subparsers.add_parser(
+        "catalog-contract", help="Report catalog expectations / headline counts"
+    )
+    sp_catalog.add_argument(
+        "rest", nargs=argparse.REMAINDER, help="--expectations|--headlines [--json]"
+    )
+
+    sp_native = subparsers.add_parser(
+        "native-assets", help="Inspect bundled native binary state"
+    )
+    sp_native.add_argument(
+        "rest", nargs=argparse.REMAINDER, help="status|cache-root [--json]"
+    )
+
+    sp_question = subparsers.add_parser(
+        "question", help="Blocking question UI entrypoint"
+    )
+    sp_question.add_argument(
+        "rest",
+        nargs=argparse.REMAINDER,
+        help="--input <json> [--json] | --ui --state-path <path>",
+    )
+
+    sp_codex_home = subparsers.add_parser(
+        "codex-home", help="Resolve CODEX_HOME / config path"
+    )
+    sp_codex_home.add_argument(
+        "rest", nargs=argparse.REMAINDER, help="show|scope [--json]"
+    )
 
     args = parser.parse_args(argv)
 
@@ -451,10 +546,7 @@ def _dispatch(args: argparse.Namespace) -> None:
         case "resume":
             _handle_resume()
         case "autoresearch":
-            print("omx autoresearch is deprecated.")
-            print("Use the $autoresearch skill keyword instead:")
-            print("  In a Codex session, type: $autoresearch <task>")
-            sys.exit(0)
+            _handle_autoresearch(args)
         case "agents-init" | "deepinit":
             _handle_agents_init(args)
         case "agents":
@@ -489,6 +581,34 @@ def _dispatch(args: argparse.Namespace) -> None:
             from omx import __version__
 
             print(f"omx {__version__}")
+        case "star-prompt":
+            from omx.cli.star_prompt import handle_star_prompt
+
+            handle_star_prompt(list(getattr(args, "rest", []) or []))
+        case "mcp-parity":
+            from omx.cli.mcp_parity import handle_mcp_parity
+
+            handle_mcp_parity(list(getattr(args, "rest", []) or []))
+        case "tmux-hook":
+            from omx.cli.tmux_hook import handle_tmux_hook
+
+            handle_tmux_hook(list(getattr(args, "rest", []) or []))
+        case "catalog-contract":
+            from omx.cli.catalog_contract import handle_catalog_contract
+
+            handle_catalog_contract(list(getattr(args, "rest", []) or []))
+        case "native-assets":
+            from omx.cli.native_assets import handle_native_assets
+
+            handle_native_assets(list(getattr(args, "rest", []) or []))
+        case "question":
+            from omx.cli.question import handle_question
+
+            handle_question(list(getattr(args, "rest", []) or []))
+        case "codex-home":
+            from omx.cli.codex_home import handle_codex_home
+
+            handle_codex_home(list(getattr(args, "rest", []) or []))
         case _:
             print(f"Unknown command: '{args.command}'", file=sys.stderr)
             sys.exit(1)
@@ -615,21 +735,27 @@ def _handle_team(args: argparse.Namespace) -> None:
     """Spawn parallel worker panes in tmux, or manage existing teams.
 
     Subcommands via spec position:
-    - omx team 3:executor --prompt "task"  → spawn workers
-    - omx team status [team-name]          → show team status
-    - omx team shutdown [team-name]        → kill team session
+    - omx team 3:executor --prompt "task"                    → spawn workers
+    - omx team status [team-name] [--json]                   → show team status
+    - omx team shutdown [team-name] [--force] [--json]       → graceful shutdown
+    - omx team resume [team-name] [--json]                   → resume monitoring
+    - omx team scale-up <team> <count> [--agent-type T]      → add workers
+    - omx team scale-down <team> [--count N | --worker NAME] → drop workers
+    - omx team reassign <team> <task-id> <to-worker>         → reassign task
+    - omx team send-message <team> <from> <to> <body>        → mailbox send
+    - omx team broadcast <team> <from> <body>                → mailbox fan-out
     """
     import os
     from datetime import datetime, timezone
 
     spec = args.spec or ""
+    rest = list(getattr(args, "rest", []) or [])
 
-    # Handle team subcommands
-    if spec == "status":
-        _handle_team_status()
-        return
-    if spec == "shutdown":
-        _handle_team_shutdown()
+    # Sub-subcommand dispatch (Phase 9). The argparse layout makes ``args.spec``
+    # the first positional token, so a subcommand like ``status`` lands there.
+    from omx.cli.team_subcommands import dispatch_team_subcommand
+
+    if dispatch_team_subcommand(spec, rest):
         return
 
     from omx.team.contracts import TeamTask, TeamWorker
@@ -807,6 +933,50 @@ def _handle_team_shutdown() -> None:
     print(f"Killed team session: {session_name}")
 
 
+_AUTORESEARCH_DEPRECATION_MESSAGE = (
+    "omx autoresearch is hard-deprecated. "
+    "Use the `$autoresearch` skill for the hook-native persistent loop. "
+    "Use `$deep-interview --autoresearch` to create or refine mission artifacts "
+    "before execution. Direct CLI launch, resume, run, bare mission-dir aliases, "
+    "and tmux split-pane launch are no longer supported."
+)
+
+_AUTORESEARCH_HELP = """\
+omx autoresearch - Hard-deprecated legacy command surface
+
+Usage:
+  omx autoresearch --help
+
+Migration:
+  - Use `$deep-interview --autoresearch` to clarify the mission and write
+    canonical artifacts under `.omx/specs/autoresearch-{slug}/`.
+  - Use `$autoresearch "your mission"` for the stateful validator-gated
+    execution loop.
+  - The runtime entry points are now `omx.autoresearch.runtime.prepare_autoresearch_runtime`
+    and `omx.autoresearch.runtime.process_autoresearch_candidate`; these expect
+    a mission contract, not a raw task string, so the CLI shim no longer wraps
+    them.
+"""
+
+
+def _handle_autoresearch(args: argparse.Namespace) -> None:
+    """Hard-deprecated CLI shim for ``omx autoresearch`` (TS parity).
+
+    The runtime entry points (``prepare_autoresearch_runtime`` and
+    ``process_autoresearch_candidate``) require a fully-built mission
+    contract; the TS CLI surface for ``omx autoresearch`` is itself
+    hard-deprecated and only emits a redirection to the ``$autoresearch``
+    skill. We mirror that behaviour here.
+    """
+    task = (args.task or "").strip()
+    if task in ("--help", "-h", "help"):
+        print(_AUTORESEARCH_HELP)
+        return
+    print(_AUTORESEARCH_DEPRECATION_MESSAGE, file=sys.stderr)
+    print(_AUTORESEARCH_HELP, file=sys.stderr)
+    sys.exit(1)
+
+
 def _handle_ralph(args: argparse.Namespace) -> None:
     """Launch ralph persistence mode.
 
@@ -827,7 +997,7 @@ def _handle_ralph(args: argparse.Namespace) -> None:
 
     fields: dict[str, object] = {
         "active": True,
-        "current_phase": "investigate",
+        "current_phase": "starting",
         "task_description": task,
     }
 
@@ -839,11 +1009,12 @@ def _handle_ralph(args: argparse.Namespace) -> None:
         f"Primary task: {task}\n"
         "\n"
         "Follow the Ralph workflow phases:\n"
-        "1. Investigate — understand the problem, explore the codebase\n"
-        "2. Plan — create a detailed implementation plan\n"
-        "3. Execute — implement the plan with tests\n"
-        "4. Verify — run tests, check quality, ensure completion\n"
+        "1. Starting — understand the problem, plan the approach\n"
+        "2. Executing — implement the plan with tests\n"
+        "3. Verifying — run tests, check quality, ensure completion\n"
+        "4. Fixing — address verification failures and iterate\n"
         "\n"
+        "Terminal phases: complete, failed, cancelled, blocked_on_user.\n"
         "Report your current phase progress. "
         "When one phase is complete, transition to the next.\n"
     )
@@ -854,7 +1025,7 @@ def _handle_ralph(args: argparse.Namespace) -> None:
     instructions_path = omx_dir / "ralph-instructions.md"
     instructions_path.write_text(instructions, encoding="utf-8")
 
-    print("Ralph mode activated (phase: investigate)")
+    print("Ralph mode activated (phase: starting)")
     print(f"Task: {task}")
 
     codex, cli_name = _resolve_cli_or_exit()

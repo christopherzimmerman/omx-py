@@ -25,7 +25,11 @@ def resolve_dispatch_lock_timeout_ms(env: dict[str, str] | None = None) -> int:
 
     TS source: state.ts::resolveDispatchLockTimeoutMs.
     """
-    raw = (env if env is not None else os.environ).get("OMX_TEAM_DISPATCH_LOCK_TIMEOUT_MS", "").strip()
+    raw = (
+        (env if env is not None else os.environ)
+        .get("OMX_TEAM_DISPATCH_LOCK_TIMEOUT_MS", "")
+        .strip()
+    )
     if not raw:
         return DEFAULT_DISPATCH_LOCK_TIMEOUT_MS
     try:
@@ -41,7 +45,7 @@ def _now_iso() -> str:
 
 VALID_DISPATCH_STATUSES = {"pending", "notified", "delivered", "failed"}
 VALID_DISPATCH_TRANSITIONS = {
-    "pending": {"notified", "delivered", "failed"},
+    "pending": {"pending", "notified", "delivered", "failed"},
     "notified": {"delivered", "failed"},
 }
 
@@ -152,7 +156,9 @@ def enqueue_dispatch_request(
     return normalized
 
 
-def read_dispatch_request(team_dir: Path, request_id: str) -> TeamDispatchRequest | None:
+def read_dispatch_request(
+    team_dir: Path, request_id: str
+) -> TeamDispatchRequest | None:
     """Read a single dispatch request by id; returns None if absent."""
     for req in read_dispatch_requests(team_dir):
         if req.request_id == request_id:

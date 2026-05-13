@@ -32,7 +32,10 @@ from omx.team.state.io import read_tasks
 from omx.team.state.mailbox import read_mailbox
 from omx.team.state.manifest import TeamLeader as TeamLeader
 from omx.team.state.monitor import read_monitor_snapshot
-from omx.team.state_root import team_dir as _team_dir_path
+from omx.team.state_root import (
+    resolve_team_state_root as _resolve_team_state_root,
+    team_dir as _team_dir_path,
+)
 
 # Re-export ``TeamLeader`` here for callers that conceptually associate it
 # with the leader-attention surface. The canonical definition lives in
@@ -503,7 +506,9 @@ def mark_owned_teams_leader_stop_observed(
         return []
 
     target_session_id = leader_session_id.strip()
-    teams_root = Path(cwd) / ".omx" / "team"
+    # Use the canonical resolver so OMX_TEAM_STATE_ROOT redirects this walk
+    # in lock-step with team_dir().
+    teams_root = _resolve_team_state_root(cwd)
     if not teams_root.is_dir():
         return []
 

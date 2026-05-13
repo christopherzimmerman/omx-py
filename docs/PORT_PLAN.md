@@ -130,7 +130,7 @@ Python has `validate_and_normalize_ralph_state`, `ensure_canonical_ralph_artifac
 - `recordRalphVisualFeedback` + `RalphVisualFeedback` type — **Visual-Ralph workflow is broken** (the `$visual-ralph` skill writes verdict JSON to `.omx/state/{scope}/ralph-progress.json`; no Python writer)
 - `RalphProgressLedger` type and write path
 - `RalphCanonicalArtifacts` type (full artifact bundle)
-- `normalizeRalphPhase` (Python has different signature)
+- ~~`normalizeRalphPhase` (Python has different signature)~~ — ported as `normalize_ralph_phase`; phase set + alias map now aligned with TS
 
 ---
 
@@ -205,19 +205,44 @@ Port **team/team-ops.ts** as the canonical gateway re-exporting Phase 1 primitiv
 
 **Acceptance:** all current tests still pass; new tests cover V2 manifest, leader-attention, shutdown handshake, `computeTaskReadiness`.
 
-### Phase 2 — Team runtime (7–9 days, biggest single chunk; +2d for Claude per Locked Decision #3)
-Port **team/runtime.ts**. Concurrency uses `ThreadPoolExecutor` per Locked Decision #1; no asyncio. Tackle in this order to keep partial states usable:
-1. `startTeam` (Codex worker path first; Claude path second). Use Phase 1 state primitives. Wire to existing `tmux_session.py`, `worker_bootstrap.py`, `role_router.py`.
-2. `assignTask` (depends on `computeTaskReadiness` + allocation_policy already in Python).
-3. `monitorTeam` (read-only snapshot — easiest to validate via tests; parallel per-worker reads via ThreadPoolExecutor).
-4. `sendWorkerMessage` / `broadcastWorkerMessage`.
-5. `shutdownTeam` (depends on shutdown handshake from Phase 1).
-6. `waitForWorkerStartupEvidence` (Codex) — extract from `startTeam` once that path is stable.
-7. `waitForClaudeStartupEvidence` (Claude — ~430 LOC of distinct telemetry). Do after Codex path is verified.
-8. `resumeTeam` (longest — depends on everything above; do last).
-9. `reassignTask`, `applyCreatedInteractiveSessionToConfig`, `resolveWorkerLaunchArgsFromEnv`, cleanup helpers.
+### Phase 2 — Team runtime (15–22 days; rescoped after Phase 1 audit)
+Port **team/runtime.ts** (4,593 LOC) plus the support modules it depends on. Original 7–9d estimate undercounted by missing the ~4,700 LOC of support-module gaps. Concurrency uses `ThreadPoolExecutor` per Locked Decision #1.
 
-**Acceptance:** can spin up real Codex *and* Claude 3-worker teams, assign + complete a task, shut down cleanly; test via integration test with `tmux` shim.
+**Phase 2.0 — Independent slice (~1 day, parallel-safe):**
+- `TeamSnapshot` / `TeamRuntime` / `TeamShutdownSummary` / `TeamStartOptions` / `StaleTeamSummary` dataclasses
+- `applyCreatedInteractiveSessionToConfig`
+- `resolveWorkerLaunchArgsFromEnv`
+- `shouldPrekillInteractiveShutdownProcessTrees`
+- `cleanupTeamWorkerLaunchOrphanedMcpProcesses`
+
+**Phase 2.1–2.7 — Deepen support modules (~9–12 days, several can parallelize):**
+Each support module currently runs <30% of TS LOC; runtime functions can't be built without them.
+
+| Sub | Module | TS LOC | Py LOC | Notes |
+|---|---|---:|---:|---|
+| 2.1 | `tmux_session.py` | 2000 | 396 | 48 missing exports (createTeamSession, buildWorkerStartupCommand, resolveTeamWorkerCli*, sanitizeTeamName, waitForWorkerReady, dismissTrustPromptIfPresent, sendToWorker, isWorkerAlive, killWorker, resize hooks, mouse scrolling, leader-pane selection, …) |
+| 2.2 | `worker_bootstrap.py` | 911 | 171 | 15 missing exports (generateWorkerRootAgentsContent, writeWorker*OverlayFile, generateInitialInbox, generateTaskAssignmentInbox, generateShutdownInbox, buildTriggerDirective, buildMailboxTriggerDirective, …) |
+| 2.3 | `model_contract.py` | 204 | 26 | 11 missing exports (splitWorkerLaunchArgs, parseTeamWorkerLaunchArgs, normalizeTeamWorkerLaunchArgs, resolveTeamWorkerLaunchArgs, resolveAgentDefaultModel, …) |
+| 2.4 | `role_router.py` | 350 | 100 | 3 missing exports (loadRolePrompt, isKnownRole, listAvailableRoles, RoleRouterResult, routeTaskToRole) |
+| 2.5 | `worktree.py` | 552 | 132 | 12 missing exports (isGitRepository, isWorktreeDirty, parseWorktreeMode, planWorktreeTarget, ensureWorktree, rollbackProvisionedWorktrees, removeWorktreeForce, …) |
+| 2.6 | `mcp_comm.py` | 492 | 60 | 6 missing exports (queueInboxInstruction, queueDirectMailboxMessage, queueBroadcastMailboxMessage, waitForDispatchReceipt, DispatchOutcome) |
+| 2.7 | `api_interop.py` | 1189 | 89 | 5 missing exports (resolveTeamApiOperation, executeTeamApiOperation, TeamApiEnvelope, TeamApiOperation, …) |
+
+**Phase 2.8 — Mid-level runtime (~3 days, can parallelize after 2.1–2.7):**
+- `assignTask` + `reassignTask`
+- `sendWorkerMessage` + `broadcastWorkerMessage`
+- `monitorTeam` (TS-style TeamSnapshot, parallel reads via ThreadPoolExecutor)
+
+**Phase 2.9 — startTeam + shutdown (~4 days, sequential):**
+- `startTeam` (Codex path first, then Claude path)
+- `waitForWorkerStartupEvidence` (Codex)
+- `waitForClaudeStartupEvidence` (Claude — ~430 LOC)
+- `shutdownTeam` (depends on shutdown handshake from Phase 1 ✅)
+
+**Phase 2.10 — resumeTeam (~2 days, last):**
+- `resumeTeam` (~1190 LOC — largest single function in the port)
+
+**Acceptance:** spin up real Codex and Claude 3-worker teams, assign + complete a task, scale up/down, shut down cleanly, resume after kill; integration test with `tmux` shim.
 
 ### Phase 3 — Team scaling (2–3 days, depends on Phase 2)
 Port **team/scaling.ts**. Replace the heuristic-only Python file with full executors:
@@ -287,7 +312,11 @@ Per-subcommand depth audit and gap-fill. Likely focus areas:
 |---|---|---:|
 | 0 | Pre-port hygiene | 1 |
 | 1 | Team state core + team-ops gateway | 3–4 |
-| 2 | Team runtime (Codex + Claude) | 7–9 |
+| 2.0 | Runtime types + small helpers | 1 |
+| 2.1–2.7 | Support modules (tmux_session, worker_bootstrap, model_contract, role_router, worktree, mcp_comm, api_interop) | 9–12 |
+| 2.8 | Mid-level runtime (assignTask, monitorTeam, sendWorkerMessage, broadcastWorkerMessage) | 3 |
+| 2.9 | startTeam + shutdownTeam + waitFor*StartupEvidence (Codex + Claude) | 4 |
+| 2.10 | resumeTeam | 2 |
 | 3 | Team scaling | 2–3 |
 | 4 | Autoresearch runtime | 4–5 |
 | 5 | Ralph completion | 1–2 |
@@ -296,7 +325,7 @@ Per-subcommand depth audit and gap-fill. Likely focus areas:
 | 8 | HUD watch loop | 2 |
 | 9 | CLI surface completion | 3–4 |
 | 10 | Polish | 1 |
-| **Total** | — | **27–35 days** |
+| **Total** | — | **36–46 days** |
 
 Single-developer sequential execution per Locked Decision #6. Within a phase, spawn Codex native subagents for independent file-level ports (e.g., in Phase 1, port `normalizeTeamPolicy`, `normalizeTeamGovernance`, and `computeTaskReadiness` concurrently as bounded subtasks). No multi-developer split or phase-level parallelism.
 

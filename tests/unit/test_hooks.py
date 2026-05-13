@@ -9,7 +9,7 @@ from omx.hooks.loader import (
     discover_hook_plugins,
     sanitize_plugin_id,
 )
-from omx.hooks.triage import triage_prompt
+from omx.hooks.triage_heuristic import triage_prompt
 from omx.hooks.types import (
     build_derived_hook_event,
     build_hook_event,
@@ -72,20 +72,24 @@ class TestTriage(unittest.TestCase):
     def test_trivial_pass(self):
         decision = triage_prompt("hi")
         self.assertEqual(decision.lane, "PASS")
+        self.assertEqual(decision.reason, "trivial_acknowledgement")
 
     def test_opt_out_pass(self):
         decision = triage_prompt("just chat with me about python")
         self.assertEqual(decision.lane, "PASS")
+        self.assertEqual(decision.reason, "explicit_opt_out")
 
     def test_explore_question(self):
         decision = triage_prompt("explain how the auth middleware works")
         self.assertEqual(decision.lane, "LIGHT")
         self.assertEqual(decision.destination, "explore")
+        self.assertEqual(decision.reason, "question_or_explanation")
 
     def test_research_signals(self):
         decision = triage_prompt("look up the official docs for the new API version")
         self.assertEqual(decision.lane, "LIGHT")
         self.assertEqual(decision.destination, "researcher")
+        self.assertEqual(decision.reason, "external_reference_research")
 
     def test_heavy_imperative(self):
         decision = triage_prompt(
@@ -97,11 +101,13 @@ class TestTriage(unittest.TestCase):
     def test_empty_prompt(self):
         decision = triage_prompt("")
         self.assertEqual(decision.lane, "PASS")
+        self.assertEqual(decision.reason, "empty_input")
 
-    def test_default_executor(self):
-        decision = triage_prompt("fix the login bug")
+    def test_anchored_edit_executor(self):
+        decision = triage_prompt("fix typo in src/app/auth.py")
         self.assertEqual(decision.lane, "LIGHT")
         self.assertEqual(decision.destination, "executor")
+        self.assertEqual(decision.reason, "anchored_edit")
 
 
 class TestLoader(unittest.TestCase):

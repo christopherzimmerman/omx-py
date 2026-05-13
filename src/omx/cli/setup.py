@@ -16,7 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from omx.config.generator import merge_config, read_config, write_config
+from omx.config.generator import deep_merge_dicts, read_config, write_config
 from omx.utils.paths import (
     claude_agents_dir,
     claude_home,
@@ -573,7 +573,7 @@ def _ensure_mcp_servers(
     changed = any(mcp.get(k) != v for k, v in desired.items())
     if not changed:
         return False
-    config["mcp_servers"] = merge_config(mcp, desired)
+    config["mcp_servers"] = deep_merge_dicts(mcp, desired)
     if not dry_run:
         write_config(config, config_path)
     if verbose:
@@ -1052,8 +1052,8 @@ def _ensure_config(
 
     defaults: dict[str, Any] = {"model": DEFAULT_MODEL, "approval_mode": "suggest"}
     existing = read_config(config_path) if config_path.exists() else {}
-    merged = merge_config(defaults, existing)
-    merged["mcp_servers"] = merge_config(
+    merged = deep_merge_dicts(defaults, existing)
+    merged["mcp_servers"] = deep_merge_dicts(
         merged.get("mcp_servers", {}),
         _build_mcp_servers_section(),
     )

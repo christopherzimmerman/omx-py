@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from omx.config.generator import merge_config, read_config, write_config
+from omx.config.generator import deep_merge_dicts, read_config, write_config
 from omx.config.toml_writer import dumps
 from omx.utils.toml_read import parse_toml
 
@@ -48,7 +48,7 @@ class TestConfig(unittest.TestCase):
     def test_merge_config_deep(self):
         base = {"a": 1, "nested": {"x": 1, "y": 2}}
         overlay = {"b": 2, "nested": {"y": 3, "z": 4}}
-        result = merge_config(base, overlay)
+        result = deep_merge_dicts(base, overlay)
         self.assertEqual(result, {"a": 1, "b": 2, "nested": {"x": 1, "y": 3, "z": 4}})
 
     def test_read_write_config(self):

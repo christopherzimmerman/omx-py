@@ -206,10 +206,14 @@ class TeamManifestV2:
 
 
 # --- Path helpers (aligned with team.state.io._team_dir convention) ---
+# Single source of truth: omx.team.state_root.team_dir. Local wrapper preserves
+# the (cwd, team_name) argument order historically used inside this module.
+
+from omx.team.state_root import team_dir as _state_root_team_dir  # noqa: E402
 
 
 def _team_dir(cwd: str, team_name: str) -> Path:
-    return Path(cwd) / ".omx" / "team" / team_name
+    return _state_root_team_dir(team_name, cwd)
 
 
 def _manifest_v2_path(cwd: str, team_name: str) -> Path:

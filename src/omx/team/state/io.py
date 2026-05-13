@@ -22,10 +22,15 @@ from pathlib import Path
 from typing import Any
 
 from omx.team.contracts import TeamEvent, TeamTask, TeamWorker
+from omx.team.state_root import team_dir as _state_root_team_dir
 
 
 def _team_dir(cwd: str, team_name: str = "default") -> Path:
-    return Path(cwd) / ".omx" / "team" / team_name
+    # Single source of truth: omx.team.state_root.team_dir. Honors
+    # ``OMX_TEAM_STATE_ROOT`` automatically. Argument order kept as
+    # (cwd, team_name) for backwards compatibility with the historical
+    # private helper signature inside this module.
+    return _state_root_team_dir(team_name, cwd)
 
 
 def _ensure_team_dir(cwd: str, team_name: str = "default") -> Path:
