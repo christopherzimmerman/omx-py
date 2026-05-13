@@ -21,6 +21,134 @@ from omx.team.state.types import (
 CLAIM_LEASE_MINUTES = 15
 
 
+# --- Bulk task CRUD (TS parity: createTask / readTask / updateTask / listTasks) ---
+#
+# Storage divergence from TS: TS V2 uses per-task files at
+# `tasks/task-{id}.json` for finer-grained locking. The Python port currently
+# uses a bulk `tasks.json` array. These wrappers preserve the TS public surface
+# while storing in the bulk file; per-task storage migration is deferred.
+
+
+def create_task(
+    cwd: str,
+    team_name: str,
+    description: str,
+    role: str | None = None,
+    file_paths: list[str] | None = None,
+    depends_on: list[str] | None = None,
+    status: str = "pending",
+    owner: str | None = None,
+) -> "TeamTask":
+    """Create a new task and persist it.
+
+    TS source: state.ts::createTask. Increments ``next_task_id`` in team config
+    after the task is safely persisted.
+
+    Returns the created TeamTask.
+    """
+    from omx.team.contracts import TaskStatus, TeamTask
+    from omx.team.state.io import (
+        read_team_config,
+        read_tasks,
+        write_tasks,
+        write_team_config,
+    )
+
+    config = read_team_config(cwd, team_name)
+    next_id = int(config.get("next_task_id", 1))
+    task_id = str(next_id)
+
+    task = TeamTask(
+        task_id=task_id,
+        description=description,
+        role=role,
+        file_paths=file_paths or [],
+        depends_on=depends_on,
+        status=TaskStatus(status),
+        owner=owner,
+        created_at=_now_iso(),
+    )
+
+    tasks = read_tasks(cwd, team_name)
+    tasks.append(task)
+    write_tasks(cwd, tasks, team_name)
+
+    config["next_task_id"] = next_id + 1
+    write_team_config(cwd, config, team_name)
+
+    return task
+
+
+def read_task(cwd: str, team_name: str, task_id: str) -> "TeamTask | None":
+    """Read a single task by id; returns None if absent."""
+    from omx.team.state.io import read_tasks
+
+    for task in read_tasks(cwd, team_name):
+        if task.task_id == task_id:
+            return task
+    return None
+
+
+def list_tasks(cwd: str, team_name: str) -> "list[TeamTask]":
+    """List all tasks for a team."""
+    from omx.team.state.io import read_tasks
+
+    return read_tasks(cwd, team_name)
+
+
+def update_task(
+    cwd: str,
+    team_name: str,
+    task_id: str,
+    updates: dict[str, Any],
+) -> "TeamTask | None":
+    """Merge ``updates`` into the task with ``task_id`` and persist atomically.
+
+    Returns the updated TeamTask, or None if the task doesn't exist.
+    Raises ValueError on invalid ``status`` updates (TS parity).
+    """
+    from omx.team.contracts import TeamTask
+    from omx.team.state.io import read_tasks, write_tasks
+
+    if "status" in updates and updates["status"] not in (
+        "pending",
+        "blocked",
+        "in_progress",
+        "completed",
+        "failed",
+    ):
+        raise ValueError(f"Invalid task status: {updates['status']}")
+
+    tasks = read_tasks(cwd, team_name)
+    found_index = -1
+    for i, t in enumerate(tasks):
+        if t.task_id == task_id:
+            found_index = i
+            break
+    if found_index < 0:
+        return None
+
+    existing = tasks[found_index]
+    existing_dict = existing.to_dict()
+    merged = {**existing_dict, **updates}
+    # Preserve immutable fields
+    merged["task_id"] = existing.task_id
+    merged["created_at"] = existing.created_at
+    # depends_on/blocked_by precedence (TS parity)
+    if (
+        "depends_on" not in updates
+        and "blocked_by" not in updates
+        and existing.depends_on is None
+        and existing.blocked_by is not None
+    ):
+        merged["depends_on"] = list(existing.blocked_by)
+
+    updated = TeamTask.from_dict(merged)
+    tasks[found_index] = updated
+    write_tasks(cwd, tasks, team_name)
+    return updated
+
+
 class TaskReadinessReason(StrEnum):
     """Reason a task is not ready to be claimed."""
 

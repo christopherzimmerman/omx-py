@@ -39,3 +39,6 @@ Thumbs.db
 
 # OMX runtime state (generated at runtime, not source)
 .omx/
+
+# Claude Code per-project settings
+.claude/

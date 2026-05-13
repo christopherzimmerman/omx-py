@@ -66,33 +66,33 @@ Source-of-truth for porting `oh-my-codex` (TypeScript) → `omx-py` (Python). Ev
 | `migrateV1ToV2` | ⚪ | — | — | Out of scope per Locked Decision #2 |
 | `readTeamConfig` | ✅ | — | `team.state.io.read_team_config` | |
 | `saveTeamConfig` | ✅ | — | `team.state.io.write_team_config` | |
-| `writeWorkerIdentity` | ❌ | P1 | — | |
+| `writeWorkerIdentity` | ✅ | — | `team.state.io.write_worker_identity` | |
 | `readWorkerHeartbeat` | ✅ | — | `team.state.io` | |
-| `updateWorkerHeartbeat` | 🟡 | P1 | `team.state.io.write_worker_heartbeat` | Verify field parity |
+| `updateWorkerHeartbeat` | 🟡 | P2 | `team.state.io.write_worker_heartbeat` | Verify field parity during Phase 2 wiring |
 | `readWorkerStatus` | ✅ | — | `team.state.io.read_worker_status` | |
 | `writeWorkerStatus` | ✅ | — | `team.state.io.write_worker_status` | |
-| `withScalingLock` | 🟡 | P1 | `team.state.locks.with_scaling_lock` | Primitive exists but never called |
+| `withScalingLock` | ✅ | — | `team.state.locks.with_scaling_lock` | Wrapped by `team_ops.team_with_scaling_lock` |
 | `writeWorkerInbox` | ✅ | — | `team.state.io.write_worker_inbox` | |
-| `createTask` | 🟡 | P1 | `team.team_ops.create_team_task` | Doesn't honor V2 manifest |
-| `readTask` | ❌ | P1 | — | |
-| `listTasks` | 🟡 | P1 | `team.team_ops.list_team_tasks` | |
-| `updateTask` | ❌ | P1 | — | |
+| `createTask` | ✅ | — | `team.state.tasks.create_task` | Bulk-file storage (per-task V2 file layout deferred) |
+| `readTask` | ✅ | — | `team.state.tasks.read_task` | |
+| `listTasks` | ✅ | — | `team.state.tasks.list_tasks` | |
+| `updateTask` | ✅ | — | `team.state.tasks.update_task` | Rejects invalid status (TS parity) |
 | `claimTask` | ✅ | — | `team.state.tasks.claim_task` | |
 | `releaseTaskClaim` | ✅ | — | `team.state.tasks.release_task_claim` | |
 | `reclaimExpiredTaskClaim` | ✅ | — | `team.state.tasks.reclaim_expired_task` | |
 | `transitionTaskStatus` | ✅ | — | `team.state.tasks.transition_task_status` | |
 | `computeTaskReadiness` | ✅ | — | `team.state.tasks.compute_task_readiness` | |
 | `sendDirectMessage` | ✅ | — | `team.state.mailbox.send_direct_message` | |
-| `broadcastMessage` | ❌ | P1 | — | |
+| `broadcastMessage` | ✅ | — | `team.state.mailbox.broadcast_message` | Recipient list resolved by `team_ops.team_broadcast` |
 | `listMailboxMessages` | ✅ | — | `team.state.mailbox.read_mailbox` | |
 | `markMessageDelivered` | ✅ | — | `team.state.mailbox.mark_message_delivered` | |
 | `markMessageNotified` | ✅ | — | `team.state.mailbox.mark_message_notified` | |
 | `enqueueDispatchRequest` | ✅ | — | `team.state.dispatch.enqueue_dispatch_request` | |
 | `listDispatchRequests` | ✅ | — | `team.state.dispatch.read_dispatch_requests` | |
-| `readDispatchRequest` | 🟡 | P1 | `team.state.dispatch` | Verify single-record reader exists |
+| `readDispatchRequest` | ✅ | — | `team.state.dispatch.read_dispatch_request` | |
 | `transitionDispatchRequest` | ✅ | — | `team.state.dispatch.transition_dispatch_request` | |
-| `markDispatchRequestNotified` | ❌ | P1 | — | |
-| `markDispatchRequestDelivered` | ❌ | P1 | — | |
+| `markDispatchRequestNotified` | ✅ | — | `team.state.dispatch.mark_dispatch_request_notified` | |
+| `markDispatchRequestDelivered` | ✅ | — | `team.state.dispatch.mark_dispatch_request_delivered` | |
 | `appendTeamEvent` | ✅ | — | `team.state.events.append_team_event` | |
 | `readTaskApproval` | ✅ | — | `team.state.approvals.read_task_approval` | |
 | `writeTaskApproval` | ✅ | — | `team.state.approvals.write_task_approval` | |
@@ -107,16 +107,17 @@ Source-of-truth for porting `oh-my-codex` (TypeScript) → `omx-py` (Python). Ev
 | `writeTeamLeaderAttention` | ✅ | P1 | `team.state.leader.write_team_leader_attention` | Atomic via `team.state.atomic.write_atomic` |
 | `markTeamLeaderSessionStopped` | ✅ | P1 | `team.state.leader.mark_team_leader_session_stopped` | Idempotent; wraps `mark_team_leader_stop_observed(source='native_session_end')` |
 | `markOwnedTeamsLeaderSessionStopped` | ✅ | P1 | `team.state.leader.mark_owned_teams_leader_session_stopped` | Walks `.omx/team/*` and stops teams whose manifest `leader.session_id` matches |
-| `cleanupTeamState` | ❌ | P1 | — | |
-| `resolveDispatchLockTimeoutMs` | ❌ | P1 | — | |
+| `cleanupTeamState` | ✅ | — | `team.state.io.cleanup_team_state` | Idempotent |
+| `resolveDispatchLockTimeoutMs` | ✅ | — | `team.state.dispatch.resolve_dispatch_lock_timeout_ms` | Reads `OMX_TEAM_DISPATCH_LOCK_TIMEOUT_MS`, clamps to [1000, 60000] |
 
 ### `team/team-ops.ts` → `omx.team.team_ops`
 
-Gateway re-export module. After P1, every entry here should be `from omx.team.state.* import * as omx.team.team_ops.team*`.
+Gateway re-export module. Imports normalize all signatures to `(team_name, ..., cwd)` matching TS. State-layer functions that take `team_dir: Path` are wrapped to resolve via `team.state_root.team_dir`.
 
 | TS Export | Status | Phase | Python Location | Notes |
 |---|---|---|---|---|
-| All re-exports | 🔴 | P1 | `team.team_ops` | Currently 2 of ~50; rebuild as gateway |
+| All re-exports | ✅ | — | `team.team_ops` | 50 functions + 20 type re-exports; tests in `test_team_ops.py` |
+| `TeamTaskV2` | 🟡 | future | — | Per-task file storage not yet adopted; bulk file kept for now |
 
 ---
 

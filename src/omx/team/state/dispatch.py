@@ -6,12 +6,33 @@ Port of src/team/state/dispatch.ts.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from omx.team.state.types import TeamDispatchRequest
+
+
+DEFAULT_DISPATCH_LOCK_TIMEOUT_MS = 15_000
+MIN_DISPATCH_LOCK_TIMEOUT_MS = 1_000
+MAX_DISPATCH_LOCK_TIMEOUT_MS = 60_000
+
+
+def resolve_dispatch_lock_timeout_ms(env: dict[str, str] | None = None) -> int:
+    """Resolve the dispatch lock timeout from env, clamped to allowed bounds.
+
+    TS source: state.ts::resolveDispatchLockTimeoutMs.
+    """
+    raw = (env if env is not None else os.environ).get("OMX_TEAM_DISPATCH_LOCK_TIMEOUT_MS", "").strip()
+    if not raw:
+        return DEFAULT_DISPATCH_LOCK_TIMEOUT_MS
+    try:
+        val = int(raw)
+    except ValueError:
+        return DEFAULT_DISPATCH_LOCK_TIMEOUT_MS
+    return max(MIN_DISPATCH_LOCK_TIMEOUT_MS, min(val, MAX_DISPATCH_LOCK_TIMEOUT_MS))
 
 
 def _now_iso() -> str:
@@ -129,6 +150,28 @@ def enqueue_dispatch_request(
     requests.append(normalized)
     write_dispatch_requests(team_dir, requests)
     return normalized
+
+
+def read_dispatch_request(team_dir: Path, request_id: str) -> TeamDispatchRequest | None:
+    """Read a single dispatch request by id; returns None if absent."""
+    for req in read_dispatch_requests(team_dir):
+        if req.request_id == request_id:
+            return req
+    return None
+
+
+def mark_dispatch_request_notified(
+    team_dir: Path, request_id: str, reason: str | None = None
+) -> bool:
+    """Mark a dispatch request as notified (TS parity)."""
+    return transition_dispatch_request(team_dir, request_id, "notified", reason=reason)
+
+
+def mark_dispatch_request_delivered(
+    team_dir: Path, request_id: str, reason: str | None = None
+) -> bool:
+    """Mark a dispatch request as delivered (TS parity)."""
+    return transition_dispatch_request(team_dir, request_id, "delivered", reason=reason)
 
 
 def transition_dispatch_request(

@@ -140,6 +140,25 @@ def mark_message_delivered(team_dir: Path, worker_name: str, message_id: str) ->
     return False
 
 
+def broadcast_message(
+    team_dir: Path,
+    from_worker: str,
+    body: str,
+    worker_names: list[str],
+) -> list[TeamMailboxMessage]:
+    """Send the same message to every worker in ``worker_names``.
+
+    TS source: state.ts::broadcastMessage. Each recipient gets its own
+    de-duplicated entry via :func:`send_direct_message`.
+    """
+    results: list[TeamMailboxMessage] = []
+    for worker_name in worker_names:
+        if worker_name == from_worker:
+            continue
+        results.append(send_direct_message(team_dir, from_worker, worker_name, body))
+    return results
+
+
 def get_undelivered_messages(
     team_dir: Path, worker_name: str
 ) -> list[TeamMailboxMessage]:

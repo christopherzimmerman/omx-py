@@ -210,6 +210,26 @@ def append_team_event(cwd: str, event: TeamEvent, team_name: str = "default") ->
         f.write(json.dumps(event.to_dict()) + "\n")
 
 
+def write_worker_identity(
+    cwd: str, team_name: str, worker_name: str, identity: dict[str, Any]
+) -> None:
+    """Persist a worker's identity.json (TS parity: writeWorkerIdentity)."""
+    from omx.team.state.atomic import write_atomic
+
+    d = _worker_dir(cwd, team_name, worker_name)
+    write_atomic(d / "identity.json", json.dumps(identity, indent=2))
+
+
+def cleanup_team_state(cwd: str, team_name: str) -> None:
+    """Recursively delete a team's state directory (TS parity: cleanupTeamState).
+
+    Idempotent — does nothing if the directory is absent.
+    """
+    import shutil
+
+    shutil.rmtree(_team_dir(cwd, team_name), ignore_errors=True)
+
+
 def read_team_events(cwd: str, team_name: str = "default") -> list[TeamEvent]:
     """Read all team events from the JSONL event log."""
     path = _team_dir(cwd, team_name) / "events.jsonl"
